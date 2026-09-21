@@ -90,6 +90,22 @@ qa-build 产出 dist/wjx-autofill-1.0.0-universal.apk（6,138,222 B）+ .sha256 
 因此无法在本机下载 Release 资产做字节比对；改用 GitHub 服务端在上传时计算的 `assets[].digest`
 （sha256）与本地冻结文件比对，等价且更强（服务端侧计算）。
 
+## 2026-09-22 03:57–04:05　第二阶段续：发布 v1.0.1（应用内更新链路验证版本）
+
+| 时间 | 动作 | 命令 / 证据 | 结果 |
+| --- | --- | --- | --- |
+| 03:57 | Lead 升版本 | `android/version.properties` → versionName 1.0.1 / versionCode 10001 | qa-build 重建 1.0.1 |
+| 03:59 | 独立复验 1.0.1 APK | `sha256sum -c` / `apksigner` / `aapt2 badging` / `unzip -l` | sha256 `0db09f8d1444fb182fb6fceb5c2042c8890ed0b44ad29edcd69cf969d71b3dfb`；1.0.1 (10001)；minSdk 24；4 ABI×2 |
+| 04:00 | **跨版本签名一致性（覆盖安装前提）** | `apksigner --print-certs` 对比 1.0.0 与 1.0.1 | 两者证书 SHA-256 **均为** `edcce56ef5d150cc7597223ddb4380bbce328756abb4a8bd13ffbda87c708372` → 可直接覆盖安装 |
+| 04:01 | commit + push | `82ad50b release(T7): v1.0.1 …`；`git push origin main` | 远端 main = 82ad50b |
+| 04:01 | 打 tag | `git tag -a v1.0.1` + `git push origin v1.0.1` | tag 8b8992a → commit 82ad50b；触发 CI |
+| 04:02 | 发布 Release | `gh release create v1.0.1 dist/wjx-autofill-1.0.1-universal.apk dist/…sha256 --verify-tag` | https://github.com/zimu5683/wjx-auto-filler/releases/tag/v1.0.1 |
+| 04:03 | 匿名数据源校验 | `curl -s .../releases/latest` | `tag_name="v1.0.1"`；两条 `browser_download_url` 非空；API digest = `sha256:0db09f8d…` **与本地一致** |
+| 04:03 | 双 Release 并存 | `GET /releases` | v1.0.1 与 v1.0.0 各自带 APK + .sha256（用户可装 1.0.0 实测更新链路） |
+| 04:04 | 入库复核 | `git ls-files testdata/` | `qr-sample.jpg` + `qr-sample.lum.gz` 均已入库（二维码解码用例依赖） |
+
+**最终交付判定**：仓库可访问（public）+ 两个 Release 各含 APK 与 sha256 + 三份文档齐全且命令实测可复现 → **T7 达成**。
+
 ### 待办（第二阶段续：v1.0.1）
 
 - [ ] 领取 task-7（task-6 完成后 `team_task_update(claim)`）
