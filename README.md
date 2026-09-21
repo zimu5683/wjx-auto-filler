@@ -127,8 +127,10 @@ dist/                                 本地构建产物（.gitignore 忽略，�
 .github/workflows/android.yml         CI：始终构建 debug 通用包；tag v* 且配置签名 secrets 时发布 Release
 ```
 
-> 说明：`tools/wjx-probe/evidence/` 保存的是问卷星页面与平台 JS 的**原文**，属于第三方专有内容，
-> 刻意**不纳入公开仓库**（仅在本机保留），以免构成对他人代码的再分发。仓库中只保留自研的探测脚本。
+> 说明：`tools/wjx-probe/evidence/`（问卷星页面与平台 JS 原文）与 `tools/wjx-probe/fixtures/`
+> （他人问卷页面抓取）属于第三方内容，刻意**不纳入公开仓库**（仅在本机保留），以免构成对他人内容/代码的再分发。
+> 仓库中只保留自研的探测脚本与合成测试数据；需要真实页面夹具时可按 [docs/BUILD.md](docs/BUILD.md) 的
+> 「本地解析夹具」一节自行只读重建。
 
 ## 隐私说明
 

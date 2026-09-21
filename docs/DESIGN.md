@@ -14,7 +14,7 @@
 |---|---|---|
 | G1 | 粘贴或扫码得到问卷链接 → 纯 HTTP 解析出题目清单（题号/题干/题型/选项） | 对样本问卷 `https://www.wjx.cn/vm/Q0DQewW.aspx` 解析出 3 题：姓名/学号/班级，题型 TEXT |
 | G2 | 双栏字段映射（左：用户字段，右：问卷题目），保存为模板 | 模板可新建/复制/改名/删除，重启后仍在 |
-| G3 | 一次提交多组答案，默认并发 2，**每组独立会话** | 组数 N 的报告逐组可见，结果按组序返回 |
+| G3 | 一次提交多组答案，默认并发 2，**每组独立会话** | 组数 N 的报告逐组可见，结果按组序返回；对 `useAliVerify=1` 的问卷：无令牌时明确返回 `E_CAPTCHA`，用户可走 §12 人工验证兜底后重试 |
 | G4 | 未匹配字段**不得静默丢弃**，必须报错并可定位 | 构造未匹配字段 → 结果码 `E_UNMATCHED`，UI 高亮该字段 |
 | G5 | 通用包：Android 7.0+（minSdk 24）任意 ABI 设备可安装 | `aapt`/apkanalyzer 校验 minSdk=24、无 abiFilters、4 ABI 齐全 |
 | G6 | 应用内自动更新（对齐 yikou 项目 AppUpdater 逻辑） | 检查 GitHub Release → 下载 APK → 系统安装器 |
@@ -38,29 +38,35 @@
 ### 2.1 包结构与依赖方向（单向，无环）
 
 ```text
-        ┌──────────────────────────────────────────────┐
-        │  ui/            （T5）                        │
-        │  MainActivity + 页面/适配器 + SubmitCoordinator │
-        └───────┬──────────┬──────────┬────────┬────────┘
+        ┌────────────────────────────────────────────────┐
+        │  ui/   （T5，唯一允许 import android.*）        │
+        │  MainActivity + 页面/适配器 + 权限 + insets      │
+        └───────┬──────────┬──────────┬────────┬─────────┘
                 │          │          │        │
-        ┌───────▼──┐ ┌─────▼────┐ ┌───▼────┐ ┌─▼───────┐
-        │ config/  │ │  qr/     │ │ update/│ │  wjx/   │
-        │ 模板存储  │ │ 扫码解码  │ │ 自动更新│ │ 接口引擎 │
-        │  (T5)    │ │  (T5)    │ │  (T5)  │ │  (T4)   │
-        └──────────┘ └──────────┘ └────────┘ └─────────┘
-             │              │           │          ▲
-             └──────────────┴───────────┴──────────┘
-                    只允许 ui → 其余四个包
-   config → wjx（仅用 AnswerPair 数据类型）
-   qr / update：不依赖其他业务包（qr 只输出「一个 URL 字符串」）
+        ┌───────▼──┐ ┌─────▼────┐ ┌───▼────┐ ┌─▼────────┐
+        │ config/  │ │  qr/     │ │ update/│ │ submit/  │
+        │ 模板存储  │ │ 扫码解码  │ │ 自动更新│ │ 批量编排  │
+        │  (T5)    │ │  (T5)    │ │  (T5)  │ │  (T5)    │
+        └──────────┘ └──────────┘ └────────┘ └────┬─────┘
+                                                   │
+                                            ┌──────▼─────┐
+                                            │  wjx/ (T4) │
+                                            │  接口引擎   │
+                                            └────────────┘
+   依赖方向：ui → {config, qr, update, submit}
+             submit → {wjx, config}（编排需要引擎与模板类型）
+             config → wjx（仅 AnswerPair 数据类型）
+             qr / update → 无业务依赖（qr 只输出 URL 字符串）
+             wjx → 无（依赖底座，且不 import android.*）
 ```
 
 **规则（可机械检查）**
 1. `wjx/` **不依赖任何其他业务包**，且不 import `android.*`（保证 JVM 单测可跑）。它是全项目的依赖底座。
-2. `config/` 只依赖 `wjx.AnswerPair`（数据类型），不依赖 ui/qr/update。
-3. `qr/` 只做「图片/相机帧 → 字符串」，**不解析问卷语义**；URL 合法性判断由 `wjx` 的 URL 校验逻辑（`SurveyUrl` 工具）或 ui 调用完成，避免 qr 依赖 wjx 的解析器。
+2. `config/` 只依赖 `wjx.AnswerPair`（数据类型），不依赖 ui/qr/update/submit。
+3. `qr/` 只做「图片/相机帧 → 字符串」，**不解析问卷语义**；URL 合法性判断由 ui 调用 `wjx` 的 URL 校验逻辑完成，避免 qr 依赖解析器。
 4. `update/` 只做「查版本 → 下载 → 拉起安装器」，不碰问卷逻辑。
-5. `ui/` 是唯一允许 import `android.*` + 业务包的地方；`ui/SubmitCoordinator.kt` 是例外——它必须保持纯 Kotlin/JVM（可单测）。
+5. `submit/`（Lead 2026-09-22 裁决新增）：批量提交编排——并发信号量、每组独立会话、结果聚合与进度回调。依赖 `wjx`（引擎）+ `config`（`MappingTemplate` 类型），**不 import `android.*`**（可 JVM 单测）。
+6. `ui/` 是唯一允许 import `android.*` 且直接依赖全部业务包的地方；它**不含任何编排逻辑**（编排在 `submit/`）。
 
 ### 2.2 各包职责
 
@@ -70,7 +76,8 @@
 | `config/` | 模板 CRUD、`templates.json` 原子读写、导入导出（SAF）、内存 `StateFlow` | `MappingTemplate`、`AnswerGroup`、`TemplateStore`、`ImportReport` | 不发起网络请求 |
 | `qr/` | CameraX 实时扫码 + 相册图片解码（zxing），输出候选 URL | `QrScanner`、`ImageDecoder` | 不校验问卷、不联网 |
 | `update/` | GitHub Release 检查、APK 下载、FileProvider 安装、版本比较 | `UpdateInfo`、`AppUpdater` | 不自动安装、不静默下载大文件 |
-| `ui/` | 三页流程、双栏映射、进度与结果、错误文案、权限申请、insets | `MainActivity`、`SubmitCoordinator` | 不直接拼 HTTP、不直接读写 JSON |
+| `ui/` | 三页流程、双栏映射、进度与结果、错误文案、权限申请、insets、验证码兜底 Activity | `MainActivity`、页面适配器、`CaptchaActivity` | 不做并发编排、不直接拼 HTTP、不直接读写 JSON、不替页面提交数据 |
+| `submit/` | 批量提交编排：`Semaphore` 并发控制、每组独立会话、结果聚合、进度回调 | `SubmitCoordinator`、`GroupOutcome`、`BatchReport` | 不 import `android.*`、不重试、不碰 UI |
 
 ### 2.3 主流程（一次完整使用）
 
@@ -79,7 +86,7 @@
                                       │
 [左栏字段] ──► 双栏映射（ui）◄────────┘   未匹配字段高亮（不静默）
                                       │
-[分组答案] ──► config 保存模板 ──► ui/SubmitCoordinator.run(template)
+[分组答案] ──► config 保存模板 ──► submit/SubmitCoordinator.run(template)
                                       │   Semaphore(clamp(concurrency,1,5))，默认 2
                         ┌─────────────┴─────────────┐
                         ▼（每组：独立 client + 独立 fetch）▼
@@ -126,7 +133,7 @@
 
 ### 4.1 分类原则
 
-1. **机器码与人类文案分离**：`message = "<CODE>|<人类文案>"`，UI 只读 `SubmitErrorCode.of(result)`，禁止文案匹配（文案会改，码不会）。
+1. **机器码与人类文案分离**：`SubmitResult` 有 additive 字段 `errorCode: String? = null`（Lead 2026-09-22 裁决）——`errorCode == null` ⟺ 成功；`message` 只放人类文案。UI 只读 `errorCode`，**禁止文案匹配**（文案会改，码不会）。
 2. **本地错误不发请求**：`E_URL / E_EMPTY / E_UNMATCHED / E_LIMIT / E_UNSUPPORTED` 一律 `httpStatus=0`、`raw=null`，避免无意义网络流量与风控计数。
 3. **HTTP 200 ≠ 成功**：问卷星用 200 返回业务错误；成功判定集中在 `WjxResponseClassifier`（契约 §8.4）。
 4. **失败必须可定位**：未匹配字段要带字段名与候选题号；服务端拒绝要带服务端原文。
@@ -141,7 +148,7 @@
 | 服务器异常 | `E_HTTP` | 问卷服务器返回异常（HTTP 404/502…） | 「重试」按钮 + 可展开 raw |
 | 解析失败 | `E_PARSE` | 问卷页面解析失败，可能是问卷已关闭或页面改版 | 提示换链接；可展开 raw |
 | 分页问卷 | `E_PAGED` | 该问卷为分页/逐题模式，暂不支持自动填写 | 终态提示（不提供重试） |
-| 验证码拦截 | `E_CAPTCHA` | 该问卷要求人机验证（阿里云验证码），纯接口无法提交 | **终态**提示；不提供重试；不引导绕过 |
+| 验证码拦截 | `E_CAPTCHA` | 该问卷开启了安全校验（阿里云验证码），纯接口无法提交 | **终态**提示；提供「人工验证后重试」（§12，**每组最多 1 次**；文案见 `res/values/strings.xml`）；不引导绕过。T3 实测样本问卷返回 `7〒需要安全校验，请重新提交！`（HTTP 200） |
 | 未匹配字段 | `E_UNMATCHED` | 字段未匹配：「学号」未匹配到任何题目 / 匹配到多个题目（1,2） | 跳回映射页并高亮该字段 |
 | 无答案 | `E_EMPTY` | 没有可提交的答案 | 跳回分组编辑 |
 | 超长 | `E_LIMIT` | 答案超过 3000 字上限（题号 2） | 定位到该题 |
@@ -256,10 +263,10 @@
 |---|---|---|
 | 单元测试（JVM） | codec 测试向量（契约 §3.4）、HTML fixture 题型判定（§6.2）、字段匹配与值解析（§7）、错误分类器（§8.4）、版本比较、模板导入导出（含 schemaVersion=2 拒绝、坏 JSON 备份）、`SubmitCoordinator` 并发上限与结果顺序 | 无网络、无 Android 运行时 |
 | 契约测试 | 用 fake `WjxSurveyClient`/`WjxSubmitter` 驱动 ui 层，断言错误码与 UI 分支 | 无网络 |
-| 手工联调 | 对样本问卷真实 `fetch`（只读）验证解析；提交实测由 T3 执行**仅 1 次** | 真实网络 |
+| 手工联调 | 对样本问卷真实 `fetch`（只读）验证解析；提交实测由 T3 执行**仅 1 次**（结论：被安全校验以业务码 7 拦截，HTTP 200）。**端到端成功验证必须走 §12 兜底流程**（用户在自己的设备上点一次验证码） | 真实网络 + 用户配合 |
 | 打包校验 | `aapt dump badging`：package/minSdk=24/targetSdk=35、`native-code` 列出 4 ABI、无 GMS 依赖；APK 内 `.so` 仅来自 CameraX | 构建产物 |
 
-> 注意：JVM 单测里 `org.json` 是空壳（`unitTests.isReturnDefaultValues = true` 会让它返回 null）。凡单测要解析 JSON，必须补 `testImplementation("org.json:json:20231013")`（build.gradle.kts 在 T1 写作用域，已上报 Lead）。
+> 注意：JVM 单测里 `org.json` 是空壳（`unitTests.isReturnDefaultValues = true` 会让它返回 null）。Lead 已给 `android/app/build.gradle.kts` 加 `testImplementation("org.json:json:20231013")`。补充事实：`config/` 用自写 MiniJson（纯 Kotlin，刻意不用 org.json），但 `update/AppUpdater.kt` 用 org.json，故该测试依赖仍然必要。
 
 ---
 
@@ -267,7 +274,7 @@
 
 | # | 风险 | 影响 | 概率 | 缓解 / 兜底 | 责任 |
 |---|---|---|---|---|---|
-| **R1** | **阿里云验证码（页面 `useAliVerify=1/captchaType='2'`）强制拦截纯接口提交** —— 本项目 **go/no-go 点** | 若强制拦截，纯接口方案对该类问卷不可用，G1–G4 只在无验证码问卷上成立 | 中 | T3 实测判定；命中则返回 `E_CAPTCHA` 终态文案（不伪装、不绕过）；**升级路径需 Lead 决策**：① 接受限制并在 README 明示适用范围；② 改用 WebView 由用户人工过验证码后再注入答案（改变「纯接口」定位，须用户确认） | api-debug（判定）/ Lead（决策） |
+| **R1** | **阿里云验证码（`useAliVerify=1`）强制拦截纯接口提交** —— T3/T3.5 实测确认（门控信号是 `useAliVerify`，不是 `captchaType`） | 启用安全校验的问卷纯接口不可提交 | **已发生** | 引擎如实返回 `E_CAPTCHA`（不绕过）；**已缓解**：用户批准「仅验证码环节」App 内 WebView 兜底（§12 / 契约 §13），数据提交仍走纯 HTTP | api-debug（证据）/ Lead（决策）/ architect（契约） |
 | R2 | 问卷星页面改版导致解析失败 | 全部问卷不可用 | 中 | 解析与分类逻辑集中在 2 处；失败返回 `E_PARSE` 并保留 raw；URL/表单/隐藏域解析带多重回退（契约 §6.4） | T4 |
 | R3 | 服务端风控（同 IP 高频提交） | 提交被拒/账号受限 | 中 | 默认并发 2（上限 5）、每组独立会话、**不自动重试**、用户显式触发；可选进一步缓解：组间 300–800ms 随机延迟（需 Lead 批准） | T5 |
 | R4 | 本机 2GB 内存下 Gradle OOM | 构建失败、拖慢全队 | 高 | 单构建串行、后台任务、堆已限制；`--no-daemon` 备选；失败重试前先确认无并发构建 | 全队 |
@@ -279,11 +286,85 @@
 | R10 | 用户答案含个人信息，合规风险 | 隐私投诉 | 低 | 仅本地存储、不上传、不埋点；`allowBackup=false`；不保存 cookie | T5 |
 | R11 | 相机权限被拒/无相机设备 | 扫码不可用 | 中 | `required=false`；降级到相册与手输链接；不崩溃 | T5 |
 
-**R1 是唯一可能推翻方案的项**：T3 结论一出，Lead 必须立即决定「接受限制」还是「改方案」，其余模块不受影响（因为 `E_CAPTCHA` 通道已预留）。
+**R1 已实测确认且已缓解**：T3 实测样本问卷被业务码 7 拦截（HTTP 200 + `7〒需要安全校验，请重新提交！`），T3.5 进一步确认门控信号是 `useAliVerify`（6/6 问卷 `captchaType='2'`，用它门控会判死全部问卷）。用户已批准仅验证码环节用 App 内 WebView 兜底（§12），这也是**唯一的端到端验证手段**（§12.8）。
 
 ---
 
-## 12. 与冻结契约的关系
+## 12. 验证码兜底（WebView）设计（T9，用户已批准）
+
+### 12.1 为什么需要
+
+- T3.5 实测：6 个问卷的 `captchaType` 全为 `'2'`，只有 `useAliVerify=1` 会被强制安全校验；用户自己的问卷正是 `useAliVerify=1`。
+- 纯 HTTP 提交被服务端以业务码 7 拦截（HTTP 200 + `7〒需要安全校验，请重新提交！`），**没有纯 HTTP 的绕法**（也不该有）。
+- 用户已批准：**仅验证码环节**用 App 内 WebView 由用户人工完成；**数据提交仍走纯 HTTP 接口**。这是「纯接口填表」定位下唯一可行且不越界的补救路径。
+
+### 12.2 设计原则
+
+1. **验证码交给人，数据提交留给引擎**：WebView 只做两件事——唤起页面自身的验证码控件、读回令牌；引擎继续用 `HttpURLConnection` 提交。
+2. **不绕过风控**：不伪造令牌、不打码、不做请求指纹伪装；只是把「人机验证」这一步交还给人。
+3. **显式触发**：必须用户点「人工验证后重试」；不自动弹 WebView、不自动重试。
+4. **失败可读**：所有兜底失败仍是 `E_CAPTCHA` 终态 + 明确的人类文案（不新增错误码，保持错误表稳定）。
+
+### 12.3 组件与时序
+
+组件：`ui/CaptchaActivity.kt`（WebView，T5）+ 引擎的 `fetch(url, cookies)` / `submit(m, answers, captchaToken)`（T4）。
+时序严格按契约 §13.2 的 12 步：抓页面 → 判 `E_CAPTCHA` → 用户点按钮 → WebView 载入真实问卷 URL → 注入 `loadCaptchShow()` 唤起验证码 → 用户完成验证 → 收割 `captchaVerifyParam`/`captchaSceneid` → **同会话 cookie 重抓页面**（拿新 jqnonce） → 带令牌 POST → 清理会话 cookie。
+
+关键约束：**令牌单次有效**，收割后 60 秒内必须完成重抓+提交；否则按过期处理，提示重新验证。
+
+additive 字段 `sceneId`（Lead 2026-09-22 已批准）由引擎在 `fetch` 时解析、令牌非空时写入提交 body；**缺省则不携带该字段**（本地不拦截，由服务端判定）。兜底 UI 只需透传 `CaptchaHarvest`，不需感知该字段。
+
+### 12.4 Cookie 会话一致性
+
+WebView（`android.webkit.CookieManager` 全局单例）与引擎（每实例独立 `java.net.CookieManager`）之间必须**双向**注入：
+- 打开验证页前：引擎 cookie → WebView（逐条 `setCookie("https://www.wjx.cn/", "k=v")` + `flush()`）；
+- 收割令牌后：WebView 全量 cookie → `fetch(url, cookies = map)`；
+- 结束即清理 wjx 域会话 cookie（逐条置空，**不用** `removeAllCookies()`，避免误伤其他会话）。
+
+只做单向 = 令牌与会话不匹配 = 服务端继续回 7。规则细节见契约 §13.3。
+
+### 12.5 硬边界（与「模拟前端操作」的分界线）
+
+- WebView 中**不填任何表单字段、不点任何提交入口、不把答案数据传给页面**；注入脚本只有两个固定常量（唤起验证码 / 读令牌）。
+- 数据提交永远由 `WjxSubmitter` 完成。
+- 可机械审查（与实现形态一致）：`evaluateJavascript` 调用点 **1 个**（私有 helper 内）、脚本仅 **2 个固定常量**、**无动态拼接**、真实 `@JavascriptInterface` **0 个**、无点击提交入口。
+- 这条边界写进契约 §13.4 与 §13.10 的 DoD，qa-build 做静态检查。
+
+### 12.6 降级与体验
+
+| 场景 | 表现 |
+|---|---|
+| 无 WebView / 内核不可用 | `E_CAPTCHA`「设备无法打开验证页面，请在浏览器中手工填写该问卷」，隐藏兜底按钮 |
+| 用户取消 | `E_CAPTCHA`「已取消人工验证」，**不消耗**该组机会（按钮保留，可再次点击） |
+| 页面改版（无 `loadCaptchShow`） | `E_CAPTCHA`「验证页面结构已变化…」，隐藏按钮 |
+| 180 s 未收割到令牌 | `E_CAPTCHA`「未检测到验证结果，请重试」，保留按钮 |
+| 令牌过期 / 再次回 7 | `E_CAPTCHA`「验证已过期，请重新验证」，保留按钮 |
+| 该组已用过 1 次机会 | 该组隐藏入口（`captcha_exhausted` 单次语义文案，其他组不受影响） |
+
+UI 判定只看 `errorCode + 已兜底组集合`（每组最多 1 次；**取消不消耗，超时/失败消耗**；结构性失败按钮立即隐藏；多组逐组处理），不做文案匹配；文案以 `res/values/strings.xml` 为唯一真源。
+
+### 12.7 安全
+
+https-only + 顶层导航白名单（仅 `*.wjx.cn`）、禁用文件访问/多窗口、`MIXED_CONTENT_NEVER_ALLOW`、允许第三方 cookie（阿里云验证码需要）、无 JS Bridge、Activity 不 exported、`onDestroy` 销毁 WebView 并清理会话 cookie。完整配置见契约 §13.8。
+
+### 12.8 端到端验证的唯一手段（交付文档必须写明）
+
+- 用户问卷 `useAliVerify=1` → 纯 HTTP 必然被业务码 7 拦截 → **纯 HTTP 路径永远拿不到真实成功响应**。
+- 因此 **§12/契约 §13 的兜底流程是本项目唯一的端到端验证手段**：用户在自己的设备上点一次验证码 → 引擎带令牌提交 → 观察业务码 `10`。
+- 用户不执行这一步时，交付物只能提供「解析/匹配/编码/分类/兜底时序」的**单测级证据**，端到端成功无法证明。README/USAGE「已知限制」需保持「不绕过风控，只把人机验证交还给人」的叙事。
+
+### 12.9 新增风险
+
+| 风险 | 缓解 |
+|---|---|
+| 令牌短命导致「验证完还是失败」 | 60 s TTL 常量 + 明确文案 + 每组 1 次重试机会（取消不消耗） |
+| 页面改版（`loadCaptchShow`/全局变量改名） | 固定常量 + `NO_FN` 明确失败，不用正则"猜"令牌 |
+| 用户不配合验证 | 单测级证据 + 交付文档如实说明（§12.8） |
+| WebView cookie 与引擎不一致 | 双向注入 + 结束清理（契约 §13.3） |
+
+---
+
+## 13. 与冻结契约的关系
 
 - 本文件**不重复**签名、schema、错误码逐字文案：全部以 `docs/API-CONTRACT.md` 为唯一真源。
 - 若本文件与契约冲突，**以契约为准**，并回写本文件（维护者：architect）。
@@ -296,3 +377,7 @@
 | 日期 | 变更 | 作者 |
 |---|---|---|
 | 2026-09-22 | 初版：目标/非目标、分层架构、持久化、错误分类、跨设备兼容（修正 .so 表述）、安全隐私、更新/扫码设计、构建发布、测试策略、风险表 | architect |
+| 2026-09-22 | Lead 裁决：`SubmitResult` 增 `errorCode`；`SubmitCoordinator` 迁到新包 `submit/`（架构图/依赖规则/职责表同步）；T3 实测回填 R1（验证码强制拦截，G3 验收口径调整、手工联调结论更新） | Lead / api-debug / architect |
+| 2026-09-22 | Lead 改判：E_CAPTCHA 门控改为 `useAliVerify`（T3.5 证据）；新增 §12 验证码兜底（WebView）设计（用户已批准），R1 改为「已确认且已缓解」，原 §12 顺延为 §13 | Lead / 用户 / architect |
+| 2026-09-22 | Lead 批准 `SurveyModel.sceneId: String? = null`（additive）；提交时令牌非空且 sceneId 非空才写入 body，缺省不携带（T9 验收通过） | Lead / architect |
+| 2026-09-22 | Lead 最终裁定：每组 1 次兜底、不设跨组上限、按钮按「未兜底组集合」显示并逐组处理；**消耗判据：取消不消耗，超时/失败消耗，结构性失败不消耗但立即终态**；修正多组需验证时只有第一组有入口的功能缺陷；`captcha_exhausted` 改单次语义 | Lead / android-dev / architect |

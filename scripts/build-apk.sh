@@ -5,8 +5,10 @@
 # 做四件事：
 #   1. 构建 release APK（签名从 WJX_KEYSTORE_* 环境变量读；缺失则警告并回退 debug 签名）
 #   2. 复制为 dist/wjx-autofill-<versionName>-universal.apk 并生成 .sha256
-#   3. 校验：apksig 验签 / aapt2 badging（包名·版本·minSdk 24·targetSdk 35·无 native-code）
-#            / APK 内无 .so（跨设备通用包保证）/ 依赖树无 com.google.android.gms
+#   3. 校验：apksig 验签 / aapt2 badging（包名·版本·minSdk 24·targetSdk 35）
+#            / 通用包保证：arm64-v8a + armeabi-v7a + x86 + x86_64 四个 ABI 目录齐全、
+#              每个 .so 在 4 个 ABI 下都有、且工程内无自研 native 代码（A7 口径）
+#            / 依赖树无 com.google.android.gms / 二维码夹具解码（A7）
 #   4. 把全部结果写成 dist/VERIFY-REPORT.md
 #
 # 用法：
@@ -31,6 +33,7 @@ RUN_TESTS=1
 RUN_LINT=1
 RUN_BUILD=1
 RUN_CLEAN=0
+RUN_INTEGRATION=0
 
 usage() {
     sed -n '2,18p' "$0" | sed 's/^# \{0,1\}//'
@@ -43,6 +46,7 @@ for arg in "$@"; do
         --skip-lint)  RUN_LINT=0 ;;
         --skip-build) RUN_BUILD=0 ;;
         --clean)      RUN_CLEAN=1 ;;
+        --integration) RUN_INTEGRATION=1 ;;
         -h|--help)    usage; exit 0 ;;
         *) echo "未知参数：$arg（用 --help 查看用法）" >&2; exit 2 ;;
     esac
@@ -69,6 +73,8 @@ BADGING_TXT=""
 SO_COUNT="?"
 NATIVE_LINES="?"
 GMS_COUNT="?"
+BADGING_ABIS="?"
+ABI_LIST="?"
 GRADLE_TASK_STR="（--skip-build）"
 
 record() { # record <检查项> <PASS|FAIL|WARN> <详情>
@@ -120,8 +126,10 @@ write_report() { # write_report <结论>
         fi
         echo "## 通用包保证（换一台设备也能装）"
         echo
-        echo "- APK 内 .so 数量：**$SO_COUNT**（0 = 不绑定任何 ABI）"
-        echo "- badging native-code 行数：**$NATIVE_LINES**（0 = 通用包）"
+        echo "- APK 内 ABI 目录：$ABI_LIST"
+        echo "- 必备 4 个 ABI：arm64-v8a / armeabi-v7a / x86 / x86_64（缺一不可，见校验表）"
+        echo "- APK 内 .so 条目数：**$SO_COUNT**（全部位于 lib/<abi>/；这些是 androidx.camera 的 JNI 库，非自研 native 代码）"
+        echo "- badging native-code：$BADGING_ABIS"
         echo "- releaseRuntimeClasspath 中 com.google.android.gms 行数：**$GMS_COUNT**（0 = 无 GMS）"
         echo "- minSdk 24 → Android 7.0 及以上设备均可安装"
         echo
@@ -217,6 +225,21 @@ run_gradle() { # run_gradle <日志文件> <gradle 参数...>
     ( cd "$ANDROID_DIR" && ./gradlew "$@" $AAPT2_ARG ) >"$log" 2>&1
 }
 
+INTEGRATION_FLAG="$ROOT_DIR/testdata/run-integration.flag"
+if [ "$RUN_INTEGRATION" = 1 ]; then
+    : > "$INTEGRATION_FLAG"
+    record "集成测试开关" PASS "已放 $INTEGRATION_FLAG（会真发一次网络请求）"
+    # 集成测试用 assumeTrue 跳过/开启，Gradle 看不到标志文件 → 删掉测试结果强制重跑
+    rm -rf "$ANDROID_DIR/app/build/test-results"
+fi
+
+# Gradle daemon 会复用它**启动时**的环境变量：如果 daemon 是别的 shell 起的，
+# WJX_KEYSTORE_* 不会生效，release 构建会静默回退 debug 签名。先停掉 daemon。
+if [ "$SIGN_MODE" = "release" ] && [ "$RUN_BUILD" = 1 ]; then
+    ( cd "$ANDROID_DIR" && ./gradlew --stop ) > "$LOG_DIR/gradle-stop.log" 2>&1
+    record "Gradle daemon 环境刷新" PASS "已 ./gradlew --stop，确保新 daemon 看到 WJX_KEYSTORE_*"
+fi
+
 if [ "$RUN_BUILD" = 1 ]; then
     echo "==> 构建：./gradlew $GRADLE_TASK_STR"
     BUILD_LOG="$LOG_DIR/gradle-build.log"
@@ -225,6 +248,10 @@ if [ "$RUN_BUILD" = 1 ]; then
     else
         record "Gradle 构建（$GRADLE_TASK_STR）" FAIL "见 dist/logs/gradle-build.log 末尾：$(tail -3 "$BUILD_LOG" | tr '\n' ' ')"
     fi
+fi
+
+if [ "$RUN_INTEGRATION" = 1 ]; then
+    rm -f "$INTEGRATION_FLAG"
 fi
 
 # ---------------------------------------------------------------------------
@@ -296,14 +323,31 @@ fi
 # ---------------------------------------------------------------------------
 # 2) aapt2 dump badging
 # ---------------------------------------------------------------------------
+# 签名一致性：配置了 release keystore 却拿到 Debug 证书 = Gradle daemon 复用了旧环境变量
+if [ "$SIGN_MODE" = "release" ] && [ -n "$APKSIG_OUT" ]; then
+    SIGNER_SUBJECT="$(printf '%s\n' "$APKSIG_OUT" | grep -m1 '^signer=' | cut -d= -f2- | cut -d' ' -f1)"
+    if printf '%s\n' "$APKSIG_OUT" | grep -q 'CN=Android Debug'; then
+        record "签名与配置一致（release）" FAIL "配置了 release keystore，但 APK 用 Android Debug 证书签名；通常是 Gradle daemon 复用了启动时的旧环境变量 → 先 ./gradlew --stop 再构建（脚本已自动处理）"
+    else
+        record "签名与配置一致（release）" PASS "$SIGNER_SUBJECT"
+    fi
+elif [ "$SIGN_MODE" = "debug" ]; then
+    record "签名与配置一致（debug 回退）" WARN "未配置 WJX_KEYSTORE_*，APK 为 debug 签名，不能用于正式分发或覆盖安装"
+fi
+
 BADGING_TXT="$WORK_DIR/badging.txt"
 if [ -x "$AAPT2" ] && "$AAPT2" dump badging "$APK_PATH" > "$BADGING_TXT" 2>&1; then
     PKG="$(sed -n "s/^package: name='\([^']*\)'.*/\1/p" "$BADGING_TXT" | head -1)"
     VER="$(sed -n "s/^package:.*versionName='\([^']*\)'.*/\1/p" "$BADGING_TXT" | head -1)"
     VCODE="$(sed -n "s/^package:.*versionCode='\([^']*\)'.*/\1/p" "$BADGING_TXT" | head -1)"
-    MINSDK="$(sed -n "s/^sdkVersion:'\([^']*\)'/\1/p" "$BADGING_TXT" | head -1)"
+    MINSDK="$(grep -m1 '^minSdkVersion:' "$BADGING_TXT" | tr -d "'" | cut -d: -f2)"
+    if [ -z "$MINSDK" ]; then
+        # 老版 aapt2 打印 sdkVersion:，新版打印 minSdkVersion:，两者都接受
+        MINSDK="$(grep -m1 '^sdkVersion:' "$BADGING_TXT" | tr -d "'" | cut -d: -f2)"
+    fi
     TARGETSDK="$(sed -n "s/^targetSdkVersion:'\([^']*\)'/\1/p" "$BADGING_TXT" | head -1)"
     NATIVE_LINES="$(grep -c '^native-code' "$BADGING_TXT" || true)"
+    BADGING_ABIS="$(sed -n 's/^native-code: //p' "$BADGING_TXT" | tr -d "'" | head -1)"
 
     if [ "$PKG" = "com.wjx.autofill" ]; then
         record "包名 package=com.wjx.autofill" PASS "$PKG"
@@ -325,10 +369,17 @@ if [ -x "$AAPT2" ] && "$AAPT2" dump badging "$APK_PATH" > "$BADGING_TXT" 2>&1; t
     else
         record "targetSdk=35" FAIL "实际 targetSdkVersion:'$TARGETSDK'"
     fi
-    if [ "$NATIVE_LINES" = "0" ]; then
-        record "badging 无 native-code 行" PASS "通用包（不绑定 ABI）"
+    MISSING_BADGING_ABI=""
+    for abi in arm64-v8a armeabi-v7a x86 x86_64; do
+        case " $BADGING_ABIS " in
+            *" $abi "*) : ;;
+            *) MISSING_BADGING_ABI="$MISSING_BADGING_ABI $abi" ;;
+        esac
+    done
+    if [ -z "$MISSING_BADGING_ABI" ]; then
+        record "badging native-code 覆盖 4 个 ABI（通用包）" PASS "native-code: $BADGING_ABIS"
     else
-        record "badging 无 native-code 行" FAIL "出现 native-code：$(grep '^native-code' "$BADGING_TXT" | head -1)"
+        record "badging native-code 覆盖 4 个 ABI（通用包）" FAIL "缺：$MISSING_BADGING_ABI（实际 native-code: $BADGING_ABIS）"
     fi
 else
     record "aapt2 dump badging" FAIL "aapt2 执行失败（$AAPT2）"
@@ -337,15 +388,46 @@ fi
 # ---------------------------------------------------------------------------
 # 3) APK 内不得含 .so
 # ---------------------------------------------------------------------------
-SO_LIST="$WORK_DIR/so.txt"
 unzip -l "$APK_PATH" > "$WORK_DIR/unzip-list.txt" 2>&1
-grep -E '\.so$' "$WORK_DIR/unzip-list.txt" > "$SO_LIST" || true
-SO_COUNT="$(wc -l < "$SO_LIST" | tr -d ' ')"
+grep -oE 'lib/[^/]+/[^ ]+' "$WORK_DIR/unzip-list.txt" | sort -u > "$WORK_DIR/libs.txt" || true
+SO_LIST="$WORK_DIR/libs.txt"
+SO_COUNT="$(grep -c '\.so$' "$SO_LIST" || true)"
 UNZIP_LINES="$(wc -l < "$WORK_DIR/unzip-list.txt" | tr -d ' ')"
-if [ "$SO_COUNT" = "0" ]; then
-    record "APK 内无 .so（跨设备通用包）" PASS "unzip -l 共 $UNZIP_LINES 行，0 个 .so"
+ABI_LIST="$(sed 's|^lib/||; s|/.*||' "$SO_LIST" | sort -u | tr '\n' ' ' | sed 's/ *$//')"
+
+# 6a) 4 个 ABI 目录必须齐全（A7 口径：不设 abiFilters + 四 ABI 全覆盖 = 通用包）
+MISSING_ABI=""
+for abi in arm64-v8a armeabi-v7a x86 x86_64; do
+    case " $ABI_LIST " in
+        *" $abi "*) : ;;
+        *) MISSING_ABI="$MISSING_ABI $abi" ;;
+    esac
+done
+if [ -z "$MISSING_ABI" ]; then
+    record "通用包：4 个 ABI 目录齐全" PASS "ABI：$ABI_LIST（共 $SO_COUNT 个 .so 条目）"
 else
-    record "APK 内无 .so（跨设备通用包）" FAIL "$SO_COUNT 个：$(head -3 "$SO_LIST" | tr '\n' ' ')"
+    record "通用包：4 个 ABI 目录齐全" FAIL "缺 ABI：$MISSING_ABI（实际：$ABI_LIST）"
+fi
+
+# 6b) 每个 .so 必须在 4 个 ABI 下各有一份（防止某个库只打了一半）
+PARTIAL_LIBS=""
+for base in $(grep -oE '[^/]+\.so$' "$SO_LIST" | sort -u); do
+    cnt="$(grep -c "/$base$" "$SO_LIST" || true)"
+    [ "$cnt" = "4" ] || PARTIAL_LIBS="$PARTIAL_LIBS $base($cnt/4)"
+done
+if [ -z "$PARTIAL_LIBS" ]; then
+    record "每个 .so 覆盖 4 个 ABI" PASS "所有 native 库在 4 个 ABI 下各一份"
+else
+    record "每个 .so 覆盖 4 个 ABI" FAIL "覆盖不全：$PARTIAL_LIBS"
+fi
+
+# 6c) 工程内不得有自研 native 代码（.so 只应来自依赖 AAR）
+NATIVE_SRC="$(find "$ANDROID_DIR/app/src/main" \( -name '*.c' -o -name '*.cpp' -o -name '*.cc' -o -name 'CMakeLists.txt' -o -name '*.mk' \) 2>/dev/null | wc -l | tr -d ' ')"
+NATIVE_CFG="$(grep -c 'externalNativeBuild' "$ANDROID_DIR/app/build.gradle.kts" || true)"
+if [ "$NATIVE_SRC" = "0" ] && [ "$NATIVE_CFG" = "0" ]; then
+    record "无自研 native 代码（A7）" PASS "src/main 无 .c/.cpp/CMakeLists.txt，build.gradle.kts 无 externalNativeBuild"
+else
+    record "无自研 native 代码（A7）" FAIL "native 源文件 $NATIVE_SRC 个，externalNativeBuild 配置 $NATIVE_CFG 处"
 fi
 
 # ---------------------------------------------------------------------------
@@ -398,6 +480,47 @@ if [ -f "$LINT_XML" ]; then
     fi
 else
     record "lintRelease 无 Error（含 NewApi）" WARN "没有 lint 报告（可能用了 --quick/--skip-lint）"
+fi
+
+# ---------------------------------------------------------------------------
+# 7) 二维码夹具解码（A7：JPEG → zxing → 问卷链接）
+#    纯 JVM 跑（javac/java 有 java.desktop），Gradle 单测侧用同一张图转出的亮度矩阵。
+# ---------------------------------------------------------------------------
+QR_OUT="$(bash "$ROOT_DIR/scripts/gen-qr-fixture.sh" --check 2>&1)"
+if printf '%s\n' "$QR_OUT" | grep -q '^OK$'; then
+    record "二维码夹具解码（A7）" PASS "$(printf '%s\n' "$QR_OUT" | sed -n 's/^decoded=//p' | head -1)（$(printf '%s\n' "$QR_OUT" | sed -n 's/^image=//p' | head -1)）"
+else
+    record "二维码夹具解码（A7）" FAIL "$(printf '%s\n' "$QR_OUT" | tr '\n' ' ' | head -c 300)"
+fi
+
+# ---------------------------------------------------------------------------
+# 8) 静态审查：验证码兜底页（architect §13.10「可机械审查判据」）
+#    - ui/CaptchaActivity 只允许 1 个 evaluateJavascript 调用点，且脚本只能是 2 个固定常量
+#      （JS_RAISE_CAPTCHA / JS_HARVEST），不得动态拼接（$ 或 +）
+#    - 不得有真实的 @JavascriptInterface 注解（不允许页面回调把数据传回；注释里的提及不算）
+# ---------------------------------------------------------------------------
+CAPTCHA_ACTIVITY="$ANDROID_DIR/app/src/main/java/com/wjx/autofill/ui/CaptchaActivity.kt"
+if [ -f "$CAPTCHA_ACTIVITY" ]; then
+    EVAL_SITES="$(grep -c 'evaluateJavascript(' "$CAPTCHA_ACTIVITY" || true)"
+    EVAL_LINE="$(grep 'evaluateJavascript(' "$CAPTCHA_ACTIVITY" | head -1)"
+    EVAL_DYNAMIC=0
+    case "$EVAL_LINE" in
+        *'$'*|*+*) EVAL_DYNAMIC=1 ;;
+    esac
+    EVAL_CONST_CALLS="$(grep -c 'evaluate(JS_' "$CAPTCHA_ACTIVITY" || true)"
+    JS_BRIDGE="$(grep '@JavascriptInterface' "$CAPTCHA_ACTIVITY" | grep -v '^[[:space:]]*[*]' | grep -vc '^[[:space:]]*//' || true)"
+    if [ "$EVAL_SITES" = "1" ] && [ "$EVAL_DYNAMIC" = "0" ] && [ "$EVAL_CONST_CALLS" = "2" ]; then
+        record "CaptchaActivity 脚本注入固定化" PASS "evaluateJavascript 调用点 $EVAL_SITES 个、动态拼接 $EVAL_DYNAMIC 处、固定常量脚本 $EVAL_CONST_CALLS 个（JS_RAISE_CAPTCHA/JS_HARVEST）"
+    else
+        record "CaptchaActivity 脚本注入固定化" FAIL "调用点 $EVAL_SITES（期望 1）、动态拼接 $EVAL_DYNAMIC（期望 0）、固定常量脚本 $EVAL_CONST_CALLS（期望 2）"
+    fi
+    if [ "$JS_BRIDGE" = "0" ]; then
+        record "CaptchaActivity 无 @JavascriptInterface 回传" PASS "0 处注解"
+    else
+        record "CaptchaActivity 无 @JavascriptInterface 回传" FAIL "$JS_BRIDGE 处 @JavascriptInterface，需人工确认未回传答案数据"
+    fi
+else
+    record "CaptchaActivity 静态审查" WARN "文件不存在（$CAPTCHA_ACTIVITY），跳过"
 fi
 
 # ---------------------------------------------------------------------------

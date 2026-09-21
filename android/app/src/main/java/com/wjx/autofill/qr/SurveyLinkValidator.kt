@@ -25,6 +25,9 @@ object SurveyLinkValidator {
     /** 问卷页特征串：真实样本页 https://www.wjx.cn/vm/Q0DQewW.aspx 实测包含这些标记。 */
     private val QUESTION_MARKERS = listOf("divQuestion", "processjq", "hfAnswerData", "joinnew")
 
+    private val SHORT_ID_URL_REGEX =
+        Regex("""^https://(www\\.)?wjx\\.cn/(vm|jq|m)/([A-Za-z0-9]{4,32})\\.aspx""")
+
     private val URL_PATTERN = Regex("""https?://[^\s"'<>()（）【】\[\]]+""", RegexOption.IGNORE_CASE)
 
     /** 从任意文本（含二维码原始内容）里抽出第一个 http/https 链接；抽不到返回 null。 */
@@ -34,6 +37,13 @@ object SurveyLinkValidator {
         val match = URL_PATTERN.find(text)?.value ?: return null
         return match.trimEnd('.', ',', ';', ')', '）', '。', '，')
     }
+
+    /**
+     * 契约 §5.1 的 shortId 正则：^https://(www\.)?wjx\.cn/(vm|jq|m)/([A-Za-z0-9]{4,32})\.aspx
+     * 从链接推导 shortId（MappingTemplate.shortId 用），推导不到返回 null。
+     */
+    fun shortIdOf(url: String): String? =
+        SHORT_ID_URL_REGEX.find(url.trim())?.groupValues?.get(3)
 
     /** host 是否等于允许域名或其后缀子域。 */
     fun isAllowedHost(host: String?): Boolean {
@@ -53,7 +63,8 @@ object SurveyLinkValidator {
             return LinkCheck.Bad("链接格式不正确")
         }
         val scheme = uri.scheme?.lowercase()
-        val host = uri.host
+        // uri.host 是平台类型：统一 orEmpty() + 小写，后面复用同一个变量。
+        val host = uri.host.orEmpty().lowercase()
         if (scheme != "http" && scheme != "https") {
             return LinkCheck.Bad("只支持 http/https 链接")
         }
@@ -65,7 +76,13 @@ object SurveyLinkValidator {
             val upgraded = "https://" + url.substringAfter("//")
             return LinkCheck.Ok(upgraded, "已自动改用 https")
         }
-        return LinkCheck.Ok(url)
+        // 引擎（wjx/ 包）只支持 wjx.cn；其他允许域名给出提示而不是假装可用。
+        val note = if (host == "wjx.cn" || host.endsWith(".wjx.cn")) {
+            ""
+        } else {
+            "注意：自动提交引擎仅支持 wjx.cn 域名"
+        }
+        return LinkCheck.Ok(url, note)
     }
 
     /**

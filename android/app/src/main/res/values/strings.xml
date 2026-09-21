@@ -10,6 +10,11 @@
     <string name="action_parse">解析问卷</string>
     <string name="action_check_update">检查更新</string>
 
+    <!-- 链接状态 -->
+    <string name="link_check_running">正在校验链接…</string>
+    <string name="link_ok">链接可用</string>
+    <string name="link_invalid">链接不可用：%1$s</string>
+
     <!-- 内容组 -->
     <string name="label_group">内容组</string>
     <string name="label_group_hint">同一份问卷可并行提交多组不同内容</string>
@@ -20,7 +25,6 @@
     <string name="dialog_group_name_hint">例如：方案 A</string>
     <string name="dialog_delete_group_message">删除该组及其全部字段映射？</string>
     <string name="group_default_name">方案 1</string>
-    <string name="group_new_prefix">方案 %1$d</string>
     <string name="toast_need_one_group">至少保留一个内容组</string>
 
     <!-- 字段映射双栏 -->
@@ -30,7 +34,7 @@
     <string name="hint_target_column">如 1 或 q1 或 姓名</string>
     <string name="hint_content_column">填写内容</string>
     <string name="empty_guide">扫码 → 解析问卷 → 配置字段 → 提交</string>
-    <string name="empty_guide_detail">还没有配置字段。可以先用「扫码」识别问卷链接，再点「解析问卷」查看题目清单。</string>
+    <string name="empty_guide_detail">还没有配置字段。先用「扫码」识别问卷链接，再点「解析问卷」查看题目清单，点选题目即可把题号填进左栏。</string>
     <string name="action_add_row">新增一行</string>
     <string name="action_delete_selected">删除选中</string>
     <string name="action_clear_all">清空全部</string>
@@ -42,9 +46,11 @@
     <!-- 模板 -->
     <string name="label_template">模板</string>
     <string name="action_save_template">保存模板</string>
+    <string name="action_load_template">载入模板</string>
     <string name="action_import_template">导入模板</string>
     <string name="action_export_template">导出模板</string>
     <string name="dialog_save_template_title">保存模板</string>
+    <string name="dialog_load_template_title">载入模板</string>
     <string name="dialog_template_name_hint">模板名称</string>
     <string name="dialog_import_template_title">导入模板</string>
     <string name="dialog_import_hint">在此粘贴模板 JSON，或从文件选择</string>
@@ -52,10 +58,13 @@
     <string name="action_import">导入</string>
     <string name="toast_template_saved">模板已保存</string>
     <string name="toast_template_name_required">请填写模板名称</string>
+    <string name="toast_no_templates">还没有保存过模板</string>
+    <string name="toast_save_failed">保存失败：无法写入本地配置</string>
     <string name="toast_import_empty">模板内容为空</string>
     <string name="toast_import_failed">模板解析失败：%1$s</string>
-    <string name="toast_import_ok">已导入 %1$d 个内容组</string>
-    <string name="toast_export_ok">已导出并打开分享</string>
+    <string name="toast_import_ok">已导入 %1$d 个模板</string>
+    <string name="import_read_failed">无法读取所选文件</string>
+    <string name="toast_export_ok">已导出模板 JSON</string>
     <string name="toast_export_failed">导出失败：%1$s</string>
     <string name="toast_export_no_share">已导出到 %1$s</string>
     <string name="share_template_title">导出字段映射模板</string>
@@ -66,23 +75,31 @@
     <string name="toast_need_link">请先填写或扫码获取问卷链接</string>
     <string name="toast_need_pairs">请先配置至少一个字段映射</string>
     <string name="submit_running">正在并行提交 %1$d 组…</string>
-    <string name="submit_summary">成功 %1$d / 失败 %2$d</string>
+    <string name="submit_progress">已完成 %1$d / %2$d 组…</string>
+    <string name="submit_failed">提交中断：%1$s</string>
     <string name="result_success">成功</string>
     <string name="result_failed">失败</string>
     <string name="result_pending">等待中</string>
-    <string name="result_unmatched">未匹配字段：%1$s</string>
-    <string name="result_no_unmatched">全部字段已匹配</string>
+    <string name="result_badge_unmatched">未匹配</string>
+    <string name="result_badge_captcha">需验证</string>
+    <string name="result_badge_unsupported">不支持</string>
+    <string name="result_badge_empty">空答案</string>
+    <string name="result_hint_unmatched">请检查左栏字段：题号是否写对，或改用题干关键词；已高亮的行就是未匹配的字段。</string>
+    <string name="result_hint_captcha">该问卷要求人机验证，纯接口无法提交；本工具不会绕过验证码。</string>
+    <string name="result_hint_network">请检查网络后重试（提交不会自动重试，避免重复答卷）。</string>
+    <string name="result_hint_unsupported">该题型暂不支持自动填写，请在官方页面手工完成。</string>
+    <string name="result_hint_rejected">服务端拒绝了本次提交，原文见上。</string>
+    <string name="result_hint_url">请检查问卷链接是否为 https://www.wjx.cn/vm/xxxx.aspx 形式。</string>
 
     <!-- 题目清单 -->
     <string name="dialog_questions_title">题目清单</string>
-    <string name="dialog_questions_hint">点选题目会把标识自动填进左栏</string>
+    <string name="dialog_questions_title_named">题目清单：%1$s</string>
+    <string name="dialog_questions_hint">点选题目会把题号自动填进左栏（空行优先，没有空行则新增一行）</string>
     <string name="dialog_questions_empty">没有解析到题目</string>
     <string name="action_close">关闭</string>
     <string name="parse_success">已解析：%1$s（共 %2$d 题）</string>
     <string name="parse_failed">解析失败：%1$s</string>
     <string name="parse_running">正在解析问卷…</string>
-    <string name="link_check_running">正在校验链接…</string>
-    <string name="link_invalid">链接不可用：%1$s</string>
 
     <!-- 扫码页 -->
     <string name="scan_title">扫码识别问卷链接</string>
@@ -95,25 +112,37 @@
     <string name="camera_permission_manual">请到系统设置 → 应用 → 问卷自动填表 → 权限，手动开启相机权限。</string>
     <string name="action_retry">重试</string>
     <string name="action_go_settings">去设置</string>
-    <string name="scan_no_camera">设备上没有可用的后置相机，请改用「相册」导入二维码截图。</string>
 
     <!-- 相册 -->
     <string name="gallery_decode_failed">这张图片里没有识别到二维码</string>
-    <string name="gallery_open_failed">无法打开所选图片</string>
 
     <!-- 更新 -->
-    <string name="update_checking">正在检查更新…</string>
     <string name="update_latest">已是最新版本 %1$s</string>
     <string name="update_found_title">发现新版本 %1$s</string>
     <string name="update_download">下载并安装</string>
     <string name="update_later">以后再说</string>
     <string name="update_open_release">打开 Release 页面</string>
     <string name="update_downloading">正在下载更新包 %1$d%%</string>
-    <string name="update_failed">更新失败：%1$s</string>
-    <string name="update_check_failed">检查更新失败，请稍后再试</string>
-    <string name="update_no_asset">该版本没有可下载的安装包，已打开 Release 页面</string>
-    <string name="update_need_permission">请先允许「安装未知应用」，返回后重新点击更新</string>
+    <string name="update_open_failed">无法打开链接（没有可用的浏览器）</string>
     <string name="update_release_notes_empty">（该版本没有填写更新说明）</string>
+
+    <!-- 人机验证兜底（文案逐字对齐契约 §13.5） -->
+    <string name="captcha_title">人机验证</string>
+    <string name="captcha_hint">这是问卷平台要求的人机验证，App 不会替你绕过，也不会代你提交：请在下方网页里手动完成一次验证，完成后会自动返回并由 App 用接口继续提交这一组。</string>
+    <string name="captcha_status_loading">正在加载问卷页面…</string>
+    <string name="captcha_status_waiting">请在下方完成验证…</string>
+    <string name="captcha_status_done">验证完成</string>
+    <string name="captcha_fallback_button">人工验证后重试</string>
+    <string name="captcha_cancelled">已取消人工验证</string>
+    <string name="captcha_no_webview">设备无法打开验证页面，请在浏览器中手工填写该问卷</string>
+    <string name="captcha_structure_changed">验证页面结构已变化，无法自动唤起验证码</string>
+    <string name="captcha_raise_failed">无法唤起验证码：%1$s</string>
+    <string name="captcha_no_result">未检测到验证结果，请重试</string>
+    <string name="captcha_expired">验证已过期，请重新验证</string>
+    <string name="captcha_exhausted">该组已尝试过人工验证，仍未成功</string>
+    <string name="captcha_retrying">正在用验证凭证重试该组…</string>
+    <string name="captcha_retry_ok">验证通过，该组已提交成功</string>
+    <string name="captcha_retry_failed">验证后仍然失败：%1$s</string>
 
     <!-- 通用 -->
     <string name="action_confirm">确定</string>

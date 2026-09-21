@@ -1,7 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
-    android:id="@+id/root"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:background="@color/surface"
@@ -389,7 +388,21 @@
                         android:insetBottom="0dp"
                         android:minWidth="0dp"
                         android:text="@string/action_save_template"
-                        android:textSize="13sp"
+                        android:textSize="12sp"
+                        app:cornerRadius="8dp" />
+
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/loadTemplateButton"
+                        style="@style/Widget.MaterialComponents.Button.OutlinedButton"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_marginStart="6dp"
+                        android:layout_weight="1"
+                        android:insetTop="0dp"
+                        android:insetBottom="0dp"
+                        android:minWidth="0dp"
+                        android:text="@string/action_load_template"
+                        android:textSize="12sp"
                         app:cornerRadius="8dp" />
 
                     <com.google.android.material.button.MaterialButton
@@ -403,7 +416,7 @@
                         android:insetBottom="0dp"
                         android:minWidth="0dp"
                         android:text="@string/action_import_template"
-                        android:textSize="13sp"
+                        android:textSize="12sp"
                         app:cornerRadius="8dp" />
 
                     <com.google.android.material.button.MaterialButton
@@ -417,7 +430,7 @@
                         android:insetBottom="0dp"
                         android:minWidth="0dp"
                         android:text="@string/action_export_template"
-                        android:textSize="13sp"
+                        android:textSize="12sp"
                         app:cornerRadius="8dp" />
                 </LinearLayout>
 
@@ -479,6 +492,18 @@
                 android:layout_weight="1"
                 android:textColor="@color/text_secondary"
                 android:textSize="12sp" />
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/captchaFallbackButton"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:insetTop="0dp"
+                android:insetBottom="0dp"
+                android:minWidth="0dp"
+                android:text="@string/captcha_fallback_button"
+                android:textSize="12sp"
+                android:visibility="gone"
+                app:cornerRadius="8dp" />
 
             <com.google.android.material.button.MaterialButton
                 android:id="@+id/closeResultsButton"

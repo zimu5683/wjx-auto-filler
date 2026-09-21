@@ -110,4 +110,7 @@ dependencies {
 
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.9.0")
+    // Android 单元测试里 android.jar 的 org.json 是 stub：不补真实实现的话，
+    // 相关断言会"假过"。update/AppUpdater.kt 用了 org.json.JSONObject，故补上。
+    testImplementation("org.json:json:20231013")
 }

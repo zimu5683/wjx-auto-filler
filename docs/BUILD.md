@@ -160,6 +160,38 @@ unzip -l "$APK" | grep -o 'lib/[^/]*/' | sort -u
 
 ---
 
+## 本地解析夹具（不入库，可自行重建）
+
+真实问卷页 HTML 夹具放在 `tools/wjx-probe/fixtures/`，**刻意不纳入仓库**：
+它们是他人的问卷页面内容 —— 本地只读分析合理，公开再分发不合适（与 `tools/wjx-probe/evidence/` 同一原则）。
+
+- 缺少夹具时，相关解析单测会**跳过并打印原因**（不会失败）；仓库内始终保留 **8 种题型的合成 HTML** 断言，CI 上的解析测试不依赖这些外部页面。
+- 想跑完整解析测试，按下面命令**只读**重建夹具（不向任何问卷提交数据；映射已实测逐字节一致）：
+
+  ```bash
+  # 1) 抓取原始页面（只读 GET；写入 tools/wjx-probe/evidence/，该目录同样不入库）
+  node tools/wjx-probe/stage1-fetch.mjs https://www.wjx.cn/vm/Q0DQewW.aspx   # -> evidence/01-page.html
+  node tools/wjx-probe/t35b-captcha-scan.mjs                                 # -> evidence/t35b/<shortId>.html
+
+  # 2) 按单测期望的文件名组装夹具
+  mkdir -p tools/wjx-probe/fixtures
+  cp tools/wjx-probe/evidence/01-page.html      tools/wjx-probe/fixtures/Q0DQewW-3q-text-captcha-enabled.html
+  cp tools/wjx-probe/evidence/t35b/hPyt0iq.html tools/wjx-probe/fixtures/hPyt0iq-37q-text-single-multi.html
+  cp tools/wjx-probe/evidence/t35b/PuE9RFq.html tools/wjx-probe/fixtures/PuE9RFq-18q.html
+  cp tools/wjx-probe/evidence/t35b/rRESgvn.html tools/wjx-probe/fixtures/rRESgvn-22q-choice.html
+  ```
+
+  > `t35b-captcha-scan.mjs` 从问卷星公开目录取样，抓到的问卷可能与上表不同；只要这 4 个目标文件名存在即可，
+  > 其余题型断言由合成 HTML 覆盖。
+
+  ```bash
+  cd android
+  ./gradlew testReleaseUnitTest                                        # 普通开发机
+  # Termux（arm64）追加：-Pandroid.aapt2FromMavenOverride=$PREFIX/bin/aapt2
+  ```
+
+---
+
 ## CI（GitHub Actions）
 
 工作流：`.github/workflows/android.yml`，三个 job：

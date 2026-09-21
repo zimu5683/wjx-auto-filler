@@ -31,6 +31,41 @@
    用真实 APK 逐条复跑后再定稿（见第二阶段日志）。
 4. **模板 JSON schema 未在 USAGE.md 展开**：以 docs/API-CONTRACT.md 为准，避免臆造字段。
 
+## 2026-09-22 01:00–01:40　第一阶段续：跨组事实核查与文档纠偏
+
+| 时间 | 动作 | 证据 | 结果 |
+| --- | --- | --- | --- |
+| 01:00 | 核对 CameraX 是否带原生库 | `unzip -l android/app/build/outputs/apk/debug/app-debug.apk`；`unzip -l ~/.gradle/.../camera-core-1.4.1.aar` | **实测 8 个 .so**：`lib/{arm64-v8a,armeabi-v7a,x86,x86_64}/libimage_processing_util_jni.so` + `libsurface_util_jni.so`。故「无 native 代码 / 无 .so」的说法是错的，通用包的正确依据是「4 个 ABI 全打进同一 APK」 |
+| 01:01 | 通知 qa-build + Lead | `send_message` | qa-build 的 `scripts/build-apk.sh` 里「APK 内无 .so」「无 native-code」两项校验**必然失败**，已给出 4 ABI 覆盖校验的替代实现 |
+| 01:10 | Lead 回复 | 团队消息 | ① 同意 evidence 不入库，要求在文档写明；② `.kotlin/` 已由 Lead 补进 .gitignore，要求我随下次提交带入；③ push 前再核 `local.properties` 与 `dist/` |
+| 01:12 | 落实 Lead 要求 | `edit` + `git check-ignore -v` | README 加「evidence 刻意不入库」说明；`dist/probe.apk` 与 `android/local.properties` 均确认被忽略；commit `550de3b` |
+| 01:20 | 对齐冻结契约 | 读 `docs/API-CONTRACT.md` §4–§9 | USAGE.md 补齐：匹配优先级 R1/R2/R3、多选用 `\|` 分隔、3000 字上限、并发 1–5（默认 2）、重试失败组、模板 schemaVersion 兼容策略、错误对照表 |
+| 01:30 | 读 T3 实测证据 | `tools/wjx-probe/evidence/03-result.json`、`03-run.log` | 提交响应 = `7〒需要安全校验，请重新提交！`（HTTP 200，43B），verdict = **BLOCKED (code 7)** |
+| 01:32 | 发现契约缺口并上报 | `send_message` 给 Lead | §8.4 分类器只在正文含 `aliyunwaf`/`captcha`/`验证码` 时判 `E_CAPTCHA`，而真实响应不含任何关键词 → 会落 `E_REJECTED`（可重试语义），与实际「重试必然失败」不符。建议加 `7〒`/`安全校验` 判定或新增 `E_SECURITY_CHECK` |
+| 01:35 | 文档如实反映限制 | `edit` + commit `bbda5c5` | README 新增「已知限制（重要）」；USAGE 错误对照表补该案例；均明确写出**不绕过风控** |
+
+第一阶段提交记录（本地 main，未 push）：
+`2a7c4d7` 骨架+文档+CI → `cf770a0` USAGE 对齐界面 → `550de3b` evidence 说明+gitignore → `c0f45ae` 契约对齐 → `bbda5c5` 已知限制
+
+## 2026-09-22 03:25–03:35　发布前独立验收（发现阻断项）
+
+qa-build 产出 dist/wjx-autofill-1.0.0-universal.apk（6,138,222 B）+ .sha256 + VERIFY-REPORT.md 后，
+我按「push 前独立复验」的要求逐项核对：
+
+| 检查 | 命令 | 结果 |
+| --- | --- | --- |
+| sha256 | `sha256sum -c dist/wjx-autofill-1.0.0-universal.apk.sha256` | OK（326c1aa90088d7c2…） |
+| 4 ABI 通用包 | `unzip -l APK \| grep -o 'lib/[^/]*/' \| sort -u` | arm64-v8a / armeabi-v7a / x86 / x86_64 齐全（8 个 .so 条目） |
+| 包名/版本 | `aapt2 dump badging` | com.wjx.autofill 1.0.0 (10000)，targetSdk 35 |
+| minSdk | `aapt2 dump xmltree --file AndroidManifest.xml` | **24**（报告里的 FAIL 是脚本 grep 误报） |
+| **签名** | `apksigner verify --print-certs` | **FAIL：CN=Android Debug**（不是 release keystore） |
+
+**阻断项**：APK 是 **debug 签名**（sha256 0bd24fdd1e59062bf2351e8bec7b42e7d0e0140f37c8be87bc46286ec60e672a）。
+- 证据双重：我的 apksigner 输出 + VERIFY-REPORT.md 自己的 apksig 段均为 `CN=Android Debug`
+- 报告漏报：表里「签名配置 PASS」只看环境变量存在；脚本里真正的「签名与配置一致（release）」检查行**未出现在报告中**（未执行）
+- 根因（已告知 qa-build）：AGP 在配置阶段读 `providers.environmentVariable("WJX_KEYSTORE_FILE")`，而 Gradle daemon 复用启动时的进程环境 → 本机 daemon 曾在未设 `WJX_*` 时启动 → signingConfigs.release 未创建 → 静默回退 debug
+- 处置：**拒绝用该 APK 发 Release**，已上报 Lead 与 qa-build，等 release 签名重跑后再进入第二阶段
+
 ### 待办（第二阶段，依赖 task-6）
 
 - [ ] 领取 task-7（task-6 完成后 `team_task_update(claim)`）

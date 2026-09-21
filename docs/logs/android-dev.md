@@ -1,0 +1,106 @@
+# android-dev 节点日志（T5：界面 / 配置 / 扫码 / 更新）
+
+任务：task-5（依赖 task-2 契约）　写作用域：MainActivity.kt、ui/、config/、qr/、update/、submit/、res/、AndroidManifest.xml
+
+---
+
+## 2026-09-22 01:0x 起步：读契约前的独立部分
+
+- 动作：读 yikou 的 AppUpdater.kt（更新链路参考）、项目骨架、build.gradle.kts（依赖清单）。
+- 产出：
+  - `update/VersionCompare.kt`：纯标准库版本比较（不可比返回 -1，与 yikou 行为一致），qa-build 可直接 JVM 单测。
+  - `update/AppUpdater.kt`：GitHub Releases latest → tag 去 v → 比较 BuildConfig.VERSION_NAME → 优先 arm64/universal 的 .apk → 无 APK 资产不提示 → 下载到 cacheDir/updates/wjx-<version>.apk（先 .tmp 再 rename）→ FileProvider + ACTION_VIEW；异常回退打开 Release 网页。
+    - 新设备适配：Android 8+ 先查 canRequestPackageInstalls()，未开启跳 ACTION_MANAGE_UNKNOWN_APP_SOURCES 引导。
+    - minSdk 24 适配：ACTION_MANAGE_UNKNOWN_APP_SOURCES 用字符串字面量，避免 lint NewApi 误报。
+  - `update/UpdateChecker.kt`：6 小时冷却缓存（SharedPreferences），失败静默返回 null。
+  - `qr/QrDecoder.kt`：zxing MultiFormatReader；相机 YUV Y 平面（含 rowStride/pixelStride 处理）与相册 Bitmap 两条路径共用；相册按 2 的幂采样到 1600px。
+  - `qr/SurveyLinkValidator.kt`：https + 允许域名（wjx.cn/wjx.top/sojump.com 子域）+ GET 200 + 问卷标记（divQuestion/processjq/hfAnswerData/joinnew）；纯逻辑部分不 import android，可单测。
+
+## 01:2x 资源与扫码页
+
+- 产出：`res/layout/activity_main.xml`（双栏映射主界面）、item_answer_pair / item_question / item_submit_result / dialog_question_picker / dialog_import_template、`res/layout/activity_qr_scan.xml`、`res/values/strings.xml`（全量文案）、bg_panel / bg_column_header / bg_badge_* / ic_delete。
+- `qr/QrScanActivity.kt`：CameraX PreviewView + ImageAnalysis（KEEP_ONLY_LATEST），自写 Analyzer 解码；手电筒开关；权限只在进页面时申请，拒绝给「去设置」+「重试」。
+- 修复：activity_main.xml 里误用未声明的 tools 命名空间（aapt2 会直接失败），已删除该属性。
+
+## 01:3x 契约落盘，重写 config/
+
+- 读 docs/API-CONTRACT.md（620 行）全文。关键差异：AnswerPair 属 wjx/ 包且字段名是 field/value；MappingTemplate 含 id/shortId/concurrency；SubmitCoordinator 用 errorCode 而非文案前缀。
+- 删除按自己假设写的 config/Models.kt、MiniJson.kt、TemplateJson.kt、ConfigStore.kt（未提交任何外部依赖，删除无副作用）。
+- 新增 `config/TemplateStore.kt`（AnswerGroup/MappingTemplate/ImportReport/LoadOutcome + 原子写 + 损坏备份 + 导出文件名）与 `config/TemplatesJson.kt`（§4.2 schema 编解码 + 内置 MiniJson）。
+- 决策：**不用 org.json**。Android 单测里 org.json 是 android.jar 空壳（not mocked / 默认值），会让「模板导入导出」无法真实验证；自写编解码还省掉一条 build.gradle.kts 依赖改动。行为严格按 §4.2–4.4。
+- 契约 §9 的 SubmitCoordinator 按 Lead 后续裁决放到新包 `submit/`，并改用 `SubmitResult.errorCode`。
+
+## 01:4x 独立编译验证（不占 Gradle 槽）
+
+- 手段：直接用 Gradle 缓存里的 kotlin-compiler-embeddable 2.1.20 编译纯 Kotlin 文件 + 临时桩（wjx 包桩放 $TMPDIR，不进仓库、不越 api-debug 的 scope），脚本 $TMPDIR/kcheck/kc2.sh。
+- 结果：**44 条断言全过**（exit 0）。覆盖：
+  - 契约 §4.3 示例解析、2 空格缩进、字段顺序、编解码往返；
+  - schemaVersion=2 整体拒绝、坏 JSON → null、非对象 → null、空对象 → 空库；
+  - concurrency 字符串宽容转换 / 越界 clamp 到 5、shortId 缺失推导与冲突以 url 为准、value 空串合法；
+  - 缺 name / 缺 groups / 非法 surveyUrl / pair 缺 field → failures；id 重复与同批重复 → 重新生成；
+  - TemplateStore 原子写、无 .tmp 残留、损坏 → 空库 + .bad-<epoch> 备份、缺失文件 → 空库；
+  - SubmitCoordinator：concurrency 9→5、0→1、每组独立 fetch、结果按 index 升序、summary 文案、onProgress 单调、空组 E_EMPTY 且不发请求、fetch 失败保留 errorCode、groups 为空空报告、run 可取消；
+  - VersionCompare 4 条。
+- 期间修掉自身 3 个缺陷：AppUpdater 未使用变量；SurveyLinkValidator 只读首个缓冲块（标记可能漏判）与 http→https 大小写不敏感升级；PairAdapter 在绑定阶段重复挂 TextWatcher（会随复用叠加）。
+
+## 待办
+
+- [ ] api-debug 落地 wjx/ 后跑 `:app:compileDebugKotlin`（需先问 qa-build 排构建槽）。
+- [ ] task-5 因 task-2 未置 completed 而无法 claim（已请 architect 处理）。
+---
+
+## 02:0x–03:0x 契约 §13 验证码兜底 + Lead 裁定 A 落地
+
+### 新增/重写
+- `submit/CaptchaHarvest.kt`：`CaptchaHarvest(captchaVerifyParam, sceneId, cookies, harvestedAtMillis)`、`CAPTCHA_TOKEN_TTL_MS=60_000`、`CookieHeader.parse/entries`（纯 Kotlin，可单测）。
+- `ui/CaptchaActivity.kt`（按 §13 重写）：WebView 载入真实问卷 URL；打开前**逐条** `setCookie` 注入引擎会话 cookie + `flush()`；注入 §13.7 两个**逐字常量** `JS_RAISE_CAPTCHA`/`JS_HARVEST`；`RAISED` → 每 500ms 轮询收割，180s 超时；`NO_FN` → 终态「验证页面结构已变化」；成功后读回全量 cookie 返回 `CaptchaHarvest`；结束（成功/失败/取消）逐条置空 wjx.cn 会话 cookie（**不用** removeAllCookies）。安全配置按 §13.8（https-only、导航白名单 *.wjx.cn、禁文件访问/多窗口、第三方 cookie、MIXED_CONTENT_NEVER_ALLOW、onDestroy destroy）。**不填表、不点提交、不注册 @JavascriptInterface**。
+- `submit/SubmitCoordinator.kt`：additive `retryGroupWithCaptcha(template, groupIndex, harvest)`（不改 run 签名）；新增 `lastSessionCookies(index)` 记录各组 fetch 的会话快照（§13.3 方向①）。
+- `res/layout/activity_main.xml`：结果区新增 `captchaFallbackButton`「人工验证后重试」。
+
+### Lead 裁定 A（每组 1 次兜底、无跨组上限）落地
+- `captchaRetriedGroups: MutableSet<Int>` 取代批级计数器；按钮显示条件 = 存在「errorCode==E_CAPTCHA 且该组未兜底」且未在提交中；点击取**第一个未兜底组** → 修掉「多组都需要验证时只有第一组有入口」的缺陷。
+- 消耗判据（Lead 最终口径）：只有「验证环节实际发起过（captcha 已成功唤起）**且用户未取消**」才计入；取消/未唤起不消耗；结构性失败用 `captchaFallbackDisabled` 整体禁用入口（可观察行为 = 按钮立即对全部未兜底组隐藏）。
+- `captcha_exhausted` = 「该组已尝试过人工验证，仍未成功」（单次语义），作为状态不同步时的守卫提示。
+
+### 修掉 Lead 集成编译报出的真实缺陷（其余为过期快照）
+1. `Intent.putStringArrayList/getStringArrayList` → `putStringArrayListExtra/getStringArrayListExtra`（Bundle 上的同名 API 保持不变）。
+2. `suspendCancellableCoroutine` 内 `continuation.resume(...)` 缺 `import kotlin.coroutines.resume`。
+3. 引擎实现类 override 不继承接口默认参数 → `HttpWjxSurveyClient().fetch(url)` 改为显式 `fetch(url, emptyMap())`。
+4. qa-build 报的 `SurveyLinkValidator.checkSyntax` 重复 `val host` 已修（统一为 `uri.host.orEmpty().lowercase()` 复用）。
+
+### 独立编译验证（不占 Gradle 槽）
+- 手段：kotlinc 2.1.20 直接编译**全部 main 源集**（含 api-debug 的真实 wjx/ 五个文件）+ android-35 的 android.jar + 从 Gradle transform/AAR 抽出的依赖 classes.jar + 仅用于校验的 ViewBinding/R/BuildConfig 桩（桩全部放 $TMPDIR，不进仓库）。
+- 结果：**ANDROID SOURCE COMPILE OK**（多次迭代后最终一次 exit 0）。
+- 静态边界自检：`ui/` 中 `evaluateJavascript` 只有 1 个调用点，入参只可能是两个常量；`loadUrl` 只接受真实问卷 URL；无 `@JavascriptInterface`；无 answers/submitdata 注入路径。
+
+### 未做/待确认
+- 未跑 Gradle（Lead 统一占槽）；等 Lead 的集成编译结果。
+- WebView 实际渲染与阿里云验证码控件行为只能在真机验证（这是 §13.9 的唯一端到端手段）。
+---
+
+## 03:1x 构建期自查发现并修复的真缺陷（全部在 Gradle 编译/流水线前解决）
+
+| # | 缺陷 | 后果 | 发现方式 |
+|---|---|---|---|
+| 1 | **QrScanActivity 未在 AndroidManifest.xml 声明** | 点「扫码」直接 ActivityNotFoundException 崩溃 | 自查「所有 Activity 类 ↔ 清单声明」一致性 |
+| 2 | `Intent.putStringArrayList/getStringArrayList` | 编译失败 | Lead 集成编译 + 我独立编译 |
+| 3 | `suspendCancellableCoroutine` 内 resume 缺 `import kotlin.coroutines.resume` | 编译失败 | 同上 |
+| 4 | 引擎实现类 override 不继承接口默认参数 → `HttpWjxSurveyClient().fetch(url)` | 编译失败 | 同上 |
+| 5 | `SurveyLinkValidator.checkSyntax` 重复 `val host` | 编译失败 | qa-build 独立发现 |
+| 6 | `PairAdapter` 在 onBindViewHolder 里重复挂 TextWatcher | 复用后 watcher 叠加，编辑内容错乱 | 代码自查 |
+| 7 | `SurveyLinkValidator` 只读首个缓冲块判断问卷标记 | 标记在 8KB 之后会漏判 → 误报「不是问卷页面」 | 代码自查 |
+| 8 | http→https 升级只处理小写前缀 | 大写 HTTP 链接不升级 | 代码自查 |
+
+## 03:33 最终验证（真实 Gradle 流水线，非自验）
+
+- dist/VERIFY-REPORT.md：`test lintRelease assembleRelease` → **ALL PASS（21/21）**
+- 单元测试 246 用例 0 失败；lintRelease 无 Error（含 NewApi）
+- APK：dist/wjx-autofill-1.0.0-universal.apk（6138222 字节）
+  sha256=`fd1370a7040e805e2e70b438f52d4cb36b26077bf79b54ca29de39b3a433a9ab`
+- T5 专项：CaptchaActivity 静态检查 PASS（evaluateJavascript 1 个调用点 / 动态拼接 0 / 固定常量脚本 2 / @JavascriptInterface 0）
+
+## 仍未验证（本机无法证明，如实记录）
+
+1. 真机 WebView + 阿里云验证码控件行为（§13 兜底是唯一端到端手段，需用户在设备上完成一次）。
+2. 相机实时扫码的预览/对焦/手电筒（相册解码有单测夹具覆盖）。
+3. 应用内更新链路需 v1.0.1 Release 才能端到端验证。
