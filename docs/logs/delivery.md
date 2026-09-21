@@ -66,7 +66,31 @@ qa-build 产出 dist/wjx-autofill-1.0.0-universal.apk（6,138,222 B）+ .sha256 
 - 根因（已告知 qa-build）：AGP 在配置阶段读 `providers.environmentVariable("WJX_KEYSTORE_FILE")`，而 Gradle daemon 复用启动时的进程环境 → 本机 daemon 曾在未设 `WJX_*` 时启动 → signingConfigs.release 未创建 → 静默回退 debug
 - 处置：**拒绝用该 APK 发 Release**，已上报 Lead 与 qa-build，等 release 签名重跑后再进入第二阶段
 
-### 待办（第二阶段，依赖 task-6）
+## 2026-09-22 03:36–03:55　第二阶段：建仓库、push、发布 v1.0.0（完成）
+
+| 时间 | 动作 | 命令 / 证据 | 结果 |
+| --- | --- | --- | --- |
+| 03:36 | claim task-7 | `team_task_get` → `team_task_update(claim)` | in_progress，owner=delivery（rev 2） |
+| 03:37 | 冻结产物复核 | `cd dist && sha256sum -c …`；`apksigner verify --print-certs` | OK；CN=WJX AutoFill（SHA-256 edcce56e…） |
+| 03:38 | fixtures 发布决策 | 发现 `WjxPageParserTest` 强依赖 `tools/wjx-probe/fixtures/` 的 4 个他人问卷页 HTML | 上报 Lead；**裁定：不入库**，改用「缺失可见 skip」（qa-build 已落盘：无夹具 5 skip / 0 fail） |
+| 03:40 | 排除第三方内容 | `.git/info/exclude` 增 `tools/wjx-probe/fixtures/`（与 evidence/ 同策略，仅本机） | `git ls-files` 中 fixtures/evidence 均 0 命中 |
+| 03:41 | 文档补充重建方法 | `docs/BUILD.md` 新增「本地解析夹具」节：`stage1-fetch.mjs` / `t35b-captcha-scan.mjs` + 4 条 `cp` 映射 | 映射经 `cmp` 实测**逐字节一致**；README 同步说明两个目录不入库 |
+| 03:44 | 首次 commit + push 尝试 | `git commit` → `20ab409`；`git push` | **push 挂起**：本机无 git credential helper（`gh auth setup-git` 未执行） |
+| 03:45 | 修复并 push | `gh auth setup-git` → `git push -u origin main` | 成功，远端 main = 20ab409 |
+| 03:46 | 建 public 仓库 | `gh repo create zimu5683/wjx-auto-filler --public --source=. --remote=origin` | https://github.com/zimu5683/wjx-auto-filler（匿名 API 200，visibility=public） |
+| 03:47 | 打 tag 并推送 | `git tag -a v1.0.0` + `git push origin v1.0.0` | 远端 tag 85f4a2d → commit 20ab409；**触发 CI** |
+| 03:48 | 发布 Release | `gh release create v1.0.0 dist/wjx-autofill-1.0.0-universal.apk dist/wjx-autofill-1.0.0-universal.apk.sha256 --verify-tag --notes-file …` | https://github.com/zimu5683/wjx-auto-filler/releases/tag/v1.0.0（2 个资产，非 draft/prerelease） |
+| 03:50 | 匿名数据源校验（AppUpdater 字段） | `curl -s .../releases/latest` | `tag_name="v1.0.0"` 非空；`assets[].browser_download_url` 两条均非空；size 6138222 / 99 |
+| 03:52 | 资产字节校验 | API `assets[].digest` | `sha256:fd1370a7040e805e2e70b438f52d4cb36b26077bf79b54ca29de39b3a433a9ab` **与本地冻结 APK 完全一致** |
+| 03:53 | 提交 qa-build 日志并 push | `git commit` → `83df04b`；`git push` | 远端 main = 83df04b（本地/远端一致） |
+| 03:54 | CI 结果 | `gh run list --repo …` | tag v1.0.0 的 **Android APK 工作流：completed / success（3m44s）** → A10「脱离 Termux 也能构建」成立 |
+
+**本机网络限制（如实记录）**：从本机 `curl`/`gh release download` 直连 `github.com` 会 connect timeout
+（DNS 正常：github.com→20.205.243.166，objects.githubusercontent.com→185.199.x.x；VPN 路由问题），
+因此无法在本机下载 Release 资产做字节比对；改用 GitHub 服务端在上传时计算的 `assets[].digest`
+（sha256）与本地冻结文件比对，等价且更强（服务端侧计算）。
+
+### 待办（第二阶段续：v1.0.1）
 
 - [ ] 领取 task-7（task-6 完成后 `team_task_update(claim)`）
 - [ ] 核对 AppUpdater 仓库常量与 UI 文案，回填 USAGE.md 实际按钮名
