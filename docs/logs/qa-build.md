@@ -136,3 +136,21 @@ bash scripts/build-apk.sh            # test + lintRelease + assembleRelease + �
 - Lead 要求冻结：03:35 的测试运行未重新打包，APK mtime 03:33:20、sha256 未变。
 - delivery 已独立复验（sha256 -c / apksigner / 4 ABI / badging）通过。
 - task-6 已由 Lead 标记 completed；下一轮 1.0.1 由 Lead 通知后重建。
+## 2026-09-22 03:50–04:00 夹具缺失改为 skip（Lead 派活，CI 需要）
+
+背景：真实问卷页 fixture 不进公开仓库（别人的问卷内容），CI / 全新克隆上没有 tools/wjx-probe/fixtures/，
+原实现找不到夹具会 throw AssertionError → test job 红，A10「脱离 Termux 也能构建」挂。
+
+改动（android/app/src/test/java/com/wjx/autofill/wjx/WjxPageParserTest.kt）：
+- 新增 fixturesDir()：优先 -Dwjx.fixtures.dir / 环境变量 WJX_FIXTURES_DIR，否则从 user.dir 向上找；找不到返回 null。
+- 新增 fixtureOrSkip(name)：缺失时 println 可见原因 + Assume.assumeTrue(false) 跳过（不静默、不判失败）。
+- 合成 HTML 8 种题型用例、E_URL/E_PARSE/E_PAGED 错误路径用例**不依赖夹具，始终运行**。
+
+验证（只跑 test，未跑 assembleRelease；APK sha256 前后一致 = fd1370a7040e805e2e70b438f52d4cb36b26077bf79b54ca29de39b3a433a9ab）：
+
+| 场景 | 命令 | 结果 |
+|---|---|---|
+| A 有夹具 | ./gradlew test | BUILD SUCCESSFUL；debug/release 各 123 用例、0 失败、1 跳过（默认跳过的集成测试） |
+| B 模拟 CI 无夹具 | ./gradlew --stop; WJX_FIXTURES_DIR=/nonexistent ./gradlew :app:testDebugUnitTest --tests WjxPageParserTest --no-build-cache | BUILD SUCCESSFUL；9 用例中 5 跳过 0 失败，并打印 [skip] fixtures 未提供… 提示 |
+
+收尾：已 ./gradlew --stop 清掉带 WJX_FIXTURES_DIR 的 daemon，避免污染后续构建环境。
