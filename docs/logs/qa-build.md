@@ -154,3 +154,14 @@ bash scripts/build-apk.sh            # test + lintRelease + assembleRelease + �
 | B 模拟 CI 无夹具 | ./gradlew --stop; WJX_FIXTURES_DIR=/nonexistent ./gradlew :app:testDebugUnitTest --tests WjxPageParserTest --no-build-cache | BUILD SUCCESSFUL；9 用例中 5 跳过 0 失败，并打印 [skip] fixtures 未提供… 提示 |
 
 收尾：已 ./gradlew --stop 清掉带 WJX_FIXTURES_DIR 的 daemon，避免污染后续构建环境。
+## 2026-09-22 03:55–04:00 重建 1.0.1（最短路径）
+
+Lead 升版后执行：`bash scripts/build-apk.sh --quick`（只 assembleRelease，不重跑 test/lint），带 release keystore 环境变量。
+
+- 结果：PASS 19 / FAIL 0 / WARN 1（WARN = --quick 未跑测试，报告里已注明测试证据来自 1.0.0 完整流水线）。
+- dist/wjx-autofill-1.0.1-universal.apk：6138222 B，sha256 0db09f8d1444fb182fb6fceb5c2042c8890ed0b44ad29edcd69cf969d71b3dfb。
+- 签名（apksigner 独立复核）：CN=WJX AutoFill，SHA-256 edcce56ef5d150cc7597223ddb4380bbce328756abb4a8bd13ffbda87c708372 —— 与 1.0.0 **同一把密钥**，可覆盖安装。
+- 包名 com.wjx.autofill、1.0.1 (10001)、minSdk 24、targetSdk 35、4 ABI 齐全、无 GMS、无自研 native。
+- 1.0.0 产物未被动：dist/wjx-autofill-1.0.0-universal.apk 仍是 fd1370a7…。
+- 构建前先清掉了 1.0.0 遗留的部分 test-results（避免 1.0.1 报告出现误导性用例计数），并 ./gradlew --stop 刷新 daemon 环境。
+- 注意：dist/VERIFY-REPORT.md 是**每次运行覆盖生成**的，现在描述的是 1.0.1；1.0.0 的报告内容（含集成测试证据）已被本轮覆盖。
