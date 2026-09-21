@@ -1,0 +1,123 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">问卷自动填表</string>
+
+    <!-- 顶部 -->
+    <string name="label_survey_link">问卷链接</string>
+    <string name="hint_survey_link">https://www.wjx.cn/vm/xxxxxxx.aspx</string>
+    <string name="action_scan">扫码</string>
+    <string name="action_gallery">相册</string>
+    <string name="action_parse">解析问卷</string>
+    <string name="action_check_update">检查更新</string>
+
+    <!-- 内容组 -->
+    <string name="label_group">内容组</string>
+    <string name="label_group_hint">同一份问卷可并行提交多组不同内容</string>
+    <string name="action_add_group">新增组</string>
+    <string name="action_rename_group">重命名</string>
+    <string name="action_delete_group">删除组</string>
+    <string name="dialog_group_name_title">内容组名称</string>
+    <string name="dialog_group_name_hint">例如：方案 A</string>
+    <string name="dialog_delete_group_message">删除该组及其全部字段映射？</string>
+    <string name="group_default_name">方案 1</string>
+    <string name="group_new_prefix">方案 %1$d</string>
+    <string name="toast_need_one_group">至少保留一个内容组</string>
+
+    <!-- 字段映射双栏 -->
+    <string name="label_mapping">字段映射</string>
+    <string name="label_target_column">目标字段（题号 / 题干关键词）</string>
+    <string name="label_content_column">填充内容</string>
+    <string name="hint_target_column">如 1 或 q1 或 姓名</string>
+    <string name="hint_content_column">填写内容</string>
+    <string name="empty_guide">扫码 → 解析问卷 → 配置字段 → 提交</string>
+    <string name="empty_guide_detail">还没有配置字段。可以先用「扫码」识别问卷链接，再点「解析问卷」查看题目清单。</string>
+    <string name="action_add_row">新增一行</string>
+    <string name="action_delete_selected">删除选中</string>
+    <string name="action_clear_all">清空全部</string>
+    <string name="action_delete_row">删除本行</string>
+    <string name="toast_no_selection">请先勾选要删除的行</string>
+    <string name="dialog_clear_all_title">清空全部字段</string>
+    <string name="dialog_clear_all_message">将清空当前组的全部字段映射，确定继续？</string>
+
+    <!-- 模板 -->
+    <string name="label_template">模板</string>
+    <string name="action_save_template">保存模板</string>
+    <string name="action_import_template">导入模板</string>
+    <string name="action_export_template">导出模板</string>
+    <string name="dialog_save_template_title">保存模板</string>
+    <string name="dialog_template_name_hint">模板名称</string>
+    <string name="dialog_import_template_title">导入模板</string>
+    <string name="dialog_import_hint">在此粘贴模板 JSON，或从文件选择</string>
+    <string name="action_pick_file">选择文件</string>
+    <string name="action_import">导入</string>
+    <string name="toast_template_saved">模板已保存</string>
+    <string name="toast_template_name_required">请填写模板名称</string>
+    <string name="toast_import_empty">模板内容为空</string>
+    <string name="toast_import_failed">模板解析失败：%1$s</string>
+    <string name="toast_import_ok">已导入 %1$d 个内容组</string>
+    <string name="toast_export_ok">已导出并打开分享</string>
+    <string name="toast_export_failed">导出失败：%1$s</string>
+    <string name="toast_export_no_share">已导出到 %1$s</string>
+    <string name="share_template_title">导出字段映射模板</string>
+
+    <!-- 提交 -->
+    <string name="action_submit">并行提交</string>
+    <string name="label_results">提交结果</string>
+    <string name="toast_need_link">请先填写或扫码获取问卷链接</string>
+    <string name="toast_need_pairs">请先配置至少一个字段映射</string>
+    <string name="submit_running">正在并行提交 %1$d 组…</string>
+    <string name="submit_summary">成功 %1$d / 失败 %2$d</string>
+    <string name="result_success">成功</string>
+    <string name="result_failed">失败</string>
+    <string name="result_pending">等待中</string>
+    <string name="result_unmatched">未匹配字段：%1$s</string>
+    <string name="result_no_unmatched">全部字段已匹配</string>
+
+    <!-- 题目清单 -->
+    <string name="dialog_questions_title">题目清单</string>
+    <string name="dialog_questions_hint">点选题目会把标识自动填进左栏</string>
+    <string name="dialog_questions_empty">没有解析到题目</string>
+    <string name="action_close">关闭</string>
+    <string name="parse_success">已解析：%1$s（共 %2$d 题）</string>
+    <string name="parse_failed">解析失败：%1$s</string>
+    <string name="parse_running">正在解析问卷…</string>
+    <string name="link_check_running">正在校验链接…</string>
+    <string name="link_invalid">链接不可用：%1$s</string>
+
+    <!-- 扫码页 -->
+    <string name="scan_title">扫码识别问卷链接</string>
+    <string name="scan_hint">将问卷二维码放入取景框</string>
+    <string name="scan_camera_error">相机启动失败：%1$s</string>
+    <string name="torch_on">手电筒：开</string>
+    <string name="torch_off">手电筒：关</string>
+    <string name="camera_permission_title">需要相机权限</string>
+    <string name="camera_permission_message">扫码需要相机权限。可以点「重试」再次申请，或点「去设置」在系统设置里手动开启。</string>
+    <string name="camera_permission_manual">请到系统设置 → 应用 → 问卷自动填表 → 权限，手动开启相机权限。</string>
+    <string name="action_retry">重试</string>
+    <string name="action_go_settings">去设置</string>
+    <string name="scan_no_camera">设备上没有可用的后置相机，请改用「相册」导入二维码截图。</string>
+
+    <!-- 相册 -->
+    <string name="gallery_decode_failed">这张图片里没有识别到二维码</string>
+    <string name="gallery_open_failed">无法打开所选图片</string>
+
+    <!-- 更新 -->
+    <string name="update_checking">正在检查更新…</string>
+    <string name="update_latest">已是最新版本 %1$s</string>
+    <string name="update_found_title">发现新版本 %1$s</string>
+    <string name="update_download">下载并安装</string>
+    <string name="update_later">以后再说</string>
+    <string name="update_open_release">打开 Release 页面</string>
+    <string name="update_downloading">正在下载更新包 %1$d%%</string>
+    <string name="update_failed">更新失败：%1$s</string>
+    <string name="update_check_failed">检查更新失败，请稍后再试</string>
+    <string name="update_no_asset">该版本没有可下载的安装包，已打开 Release 页面</string>
+    <string name="update_need_permission">请先允许「安装未知应用」，返回后重新点击更新</string>
+    <string name="update_release_notes_empty">（该版本没有填写更新说明）</string>
+
+    <!-- 通用 -->
+    <string name="action_confirm">确定</string>
+    <string name="action_cancel">取消</string>
+    <string name="action_delete">删除</string>
+    <string name="label_version">版本 %1$s</string>
+</resources>

@@ -1,0 +1,22 @@
+# 构建产物
+.gradle/
+build/
+android/build/
+android/app/build/
+dist/
+
+# 本地环境
+local.properties
+.idea/
+*.iml
+.DS_Store
+
+# 密钥：绝不入库
+*.keystore
+*.jks
+keystore.properties
+secrets.txt
+
+# 安装包（通过 GitHub Release 分发）
+*.apk
+*.apk.sha256

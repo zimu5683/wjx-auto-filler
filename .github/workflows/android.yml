@@ -1,0 +1,190 @@
+name: Android APK
+
+# 设计要点（勿改坏）：
+# 1. build job 始终运行：证明「脱离 Termux 的普通开发机/CI 也能构建」——
+#    使用官方 Gradle 8.11.1 + runner 自带 Android SDK 35，且**不传** aapt2FromMavenOverride
+#    （那是 arm64 Termux 专属；GitHub runner 是 x86-64，SDK 自带 aapt2 可直接用）。
+# 2. release job 只在 tag v* 且仓库配置了签名 secrets 时才运行；未配置则明确 skip 并打印说明。
+#    绝不允许 debug 签名产物覆盖正式 Release：那会让已安装用户无法覆盖安装，直接毁掉应用内更新链路。
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  preflight:
+    name: Check signing secret
+    runs-on: ubuntu-latest
+    outputs:
+      has_signing_key: ${{ steps.check.outputs.has_signing_key }}
+    steps:
+      - name: Detect WJX_KEYSTORE_BASE64
+        id: check
+        env:
+          WJX_KEYSTORE_BASE64: ${{ secrets.WJX_KEYSTORE_BASE64 }}
+        run: |
+          set -euo pipefail
+          if [ -n "${WJX_KEYSTORE_BASE64:-}" ]; then
+            echo "has_signing_key=true" >> "$GITHUB_OUTPUT"
+            echo "检测到签名密钥 secret：tag 构建将发布正式 Release"
+          else
+            echo "has_signing_key=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::未配置 WJX_KEYSTORE_BASE64：release job 会被跳过，本次只构建 debug 通用包并上传 artifact，不发布 Release"
+          fi
+
+  build:
+    name: Build universal debug APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Install Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: >-
+            platforms;android-35
+            build-tools;35.0.0
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.11.1"
+
+      - name: Unit tests + lint + assembleDebug
+        working-directory: android
+        run: |
+          set -euo pipefail
+          chmod +x gradlew
+          gradle --no-daemon test lintRelease assembleDebug --stacktrace
+
+      - name: Verify universal package covers 4 ABIs
+        run: |
+          set -euo pipefail
+          apk="android/app/build/outputs/apk/debug/app-debug.apk"
+          abis=$(unzip -l "$apk" | grep -o 'lib/[^/]*/' | sort -u | tr '\n' ' ')
+          echo "APK 内 ABI 目录：${abis}"
+          for abi in arm64-v8a armeabi-v7a x86 x86_64; do
+            case "$abis" in
+              *"lib/$abi/"*) ;;
+              *) echo "::error::通用包缺少 ABI：$abi"; exit 1 ;;
+            esac
+          done
+          echo "4 个 ABI 齐全：任意 Android 7.0+ 设备可安装"
+
+      - name: Upload debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: wjx-autofill-debug-universal
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+
+  release:
+    name: Build signed release + publish
+    needs: [preflight, build]
+    if: startsWith(github.ref, 'refs/tags/v') && needs.preflight.outputs.has_signing_key == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Install Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: >-
+            platforms;android-35
+            build-tools;35.0.0
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.11.1"
+
+      - name: Validate tag against android/version.properties
+        run: |
+          set -euo pipefail
+          version=$(grep '^versionName=' android/version.properties | cut -d= -f2)
+          tag_version="${GITHUB_REF_NAME#v}"
+          if [ "$tag_version" != "$version" ]; then
+            echo "::error::tag ${GITHUB_REF_NAME} 与 android/version.properties (${version}) 不一致"
+            exit 1
+          fi
+          echo "版本一致：${version}"
+
+      - name: Restore release keystore
+        env:
+          WJX_KEYSTORE_BASE64: ${{ secrets.WJX_KEYSTORE_BASE64 }}
+        run: |
+          set -euo pipefail
+          echo "$WJX_KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/wjx-release.keystore"
+          echo "WJX_KEYSTORE_FILE=$RUNNER_TEMP/wjx-release.keystore" >> "$GITHUB_ENV"
+          echo "release keystore 已从 WJX_KEYSTORE_BASE64 还原"
+
+      - name: Unit tests + assembleRelease
+        working-directory: android
+        env:
+          WJX_KEYSTORE_PASSWORD: ${{ secrets.WJX_KEYSTORE_PASSWORD }}
+          WJX_KEY_ALIAS: ${{ secrets.WJX_KEY_ALIAS }}
+          WJX_KEY_PASSWORD: ${{ secrets.WJX_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          gradle --no-daemon testReleaseUnitTest assembleRelease --stacktrace
+
+      - name: Collect APK + sha256
+        id: artifact
+        run: |
+          set -euo pipefail
+          version=$(grep '^versionName=' android/version.properties | cut -d= -f2)
+          apk="android/app/build/outputs/apk/release/app-release.apk"
+          if [ ! -f "$apk" ]; then
+            echo "::error::未找到 ${apk}"
+            exit 1
+          fi
+          name="wjx-autofill-${version}-universal.apk"
+          cp "$apk" "$RUNNER_TEMP/$name"
+          (cd "$RUNNER_TEMP" && sha256sum "$name" | tee "$name.sha256")
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "path=$RUNNER_TEMP/$name" >> "$GITHUB_OUTPUT"
+
+      - name: Verify universal package covers 4 ABIs
+        run: |
+          set -euo pipefail
+          apk="${{ steps.artifact.outputs.path }}"
+          abis=$(unzip -l "$apk" | grep -o 'lib/[^/]*/' | sort -u | tr '\n' ' ')
+          echo "APK 内 ABI 目录：${abis}"
+          for abi in arm64-v8a armeabi-v7a x86 x86_64; do
+            case "$abis" in
+              *"lib/$abi/"*) ;;
+              *) echo "::error::通用包缺少 ABI：$abi"; exit 1 ;;
+            esac
+          done
+          echo "4 个 ABI 齐全：任意 Android 7.0+ 设备可安装"
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+          cd "$RUNNER_TEMP"
+          ls -l wjx-autofill-*-universal.apk*
+          # release job 没有 checkout，必须显式 -R owner/repo；否则 gh 会尝试访问 .git。
+          gh release create "$tag" wjx-autofill-*-universal.apk wjx-autofill-*-universal.apk.sha256 \
+            -R "$GITHUB_REPOSITORY" --title "$tag" --generate-notes \
+            || gh release upload "$tag" wjx-autofill-*-universal.apk wjx-autofill-*-universal.apk.sha256 \
+                 -R "$GITHUB_REPOSITORY" --clobber

@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths>
+    <!-- AppUpdater 下载的更新包 -->
+    <cache-path name="updates" path="updates/" />
+    <!-- 导出的字段映射模板 -->
+    <files-path name="exports" path="exports/" />
+</paths>
