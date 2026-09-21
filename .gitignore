@@ -1,5 +1,7 @@
 # 构建产物
 .gradle/
+.kotlin/
+android/.kotlin/
 build/
 android/build/
 android/app/build/

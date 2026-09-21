@@ -83,11 +83,14 @@ android/                              Android 工程（AGP 8.9.1 / Kotlin 2.1.20
   gradlew / gradle/wrapper/           Gradle 8.11.1 wrapper
 docs/                                 DESIGN.md、API-CONTRACT.md、USAGE.md、BUILD.md、logs/
 scripts/                              构建与打包脚本
-tools/wjx-probe/                      问卷星接口实测脚本与原始证据
+tools/wjx-probe/                      问卷星接口实测脚本（原始证据刻意不入库，见下方说明）
 testdata/                             测试用问卷页面样本
 dist/                                 本地构建产物（.gitignore 忽略，不入库）
 .github/workflows/android.yml         CI：始终构建 debug 通用包；tag v* 且配置签名 secrets 时发布 Release
 ```
+
+> 说明：`tools/wjx-probe/evidence/` 保存的是问卷星页面与平台 JS 的**原文**，属于第三方专有内容，
+> 刻意**不纳入公开仓库**（仅在本机保留），以免构成对他人代码的再分发。仓库中只保留自研的探测脚本。
 
 ## 隐私说明
 
