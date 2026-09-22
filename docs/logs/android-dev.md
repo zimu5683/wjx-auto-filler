@@ -158,3 +158,15 @@
 ### 更正（诚实记录）
 上一条汇报里「全量源码离线编译 OK」发出时**其实编译失败了**：我把 startCaptchaFallback 的选组变量从 `outcome` 改成 `index` 时漏改了一处 `outcome.index`（→ 编译错误 unresolved reference 'outcome'）。已修正，重跑全量编译 **ANDROID SOURCE COMPILE OK**。
 教训：本次是**先发消息、后看编译结果**导致的误报；后续汇报一律等编译输出落地再发。
+---
+
+## 11:4x 恢复编辑（仅 1 文件 8 行）· 修 lintRelease MissingPermission（qa-build 报的 A9 阻断）
+
+- 前置只读核查（遵 Lead 要求先看现状）：`git status` 仅 qa-build 的日志/脚本/version.properties 有未提交改动；**无活跃 Gradle 构建**（只有空闲 daemon，build 目录 3 分钟内无写入）；`schedule/Notifier.kt` 自 10:28 起无人改动（Lead 的接管改动落在 MainActivity/SchedulePrefs/ScheduledRunner）。
+- 改动：`schedule/Notifier.kt` `notifyCaptchaFullScreen()` 内新增**同方法内**的权限检查
+  `val granted = SDK_INT < TIRAMISU || checkSelfPermission(POST_NOTIFICATIONS) == GRANTED; if (!granted) return`，
+  并把 `catch (_: Throwable)` 前增加 `catch (_: SecurityException)`。
+  保留 SDK 判断是必要的：POST_NOTIFICATIONS 在 API < 33 上不存在，直接 checkSelfPermission 会恒为 DENIED。
+- 验证：把离线编译脚本改成 **glob 全量源集**（29 个文件，含 Lead 新增的 SchedulePrefs.kt），并按布局 `@+id` **自动生成 ViewBinding 桩**（8 个布局 / 67 个 id 成员）→ **ANDROID SOURCE COMPILE OK**。
+  （此前脚本是显式文件列表，会随新增文件陈旧；这次已根治，避免再出现假报错。）
+- 已通知 qa-build 重跑 lintRelease + 出包，并同步 Lead（说明我为何恢复编辑、可随时回退）。

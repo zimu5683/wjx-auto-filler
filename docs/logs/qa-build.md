@@ -267,3 +267,61 @@ Lead 2026-09-22 裁定**取消 useAliVerify 本地门控**。现行口径：
 
 - android-dev 正在做自动进入验证页 + PendingCaptchaStore + Notifier/Manifest 变更，明确要求等他完成通知后再跑 Gradle 全量（避免编译中间态）。
 - 待其通知后：`./gradlew --stop && ./gradlew test` → `scripts/build-apk.sh --quick` 出 1.0.3。
+## 2026-09-22 11:00–11:45 T19 构建 v1.0.3
+
+### 过程
+
+- delivery 报「task-18 无 owner、dist 无 1.0.3、Lead 与几位 inactive、流水线卡住」→ 我核对（android-dev/api-debug/architect inactive、源码 5 分钟无改动、无 Gradle 进程、无锁）后接手。
+- 第一次 `./gradlew test`：debug 变体 205 用例全过；**release 变体编译失败** → `MainActivity.kt:330/334 Unresolved reference "renderScheduleStatus"`（正确函数名是 renderSchedule()）。
+  已冷启动 android-dev 并把精确改法给他；**Lead 同时已自行修好**，并补齐响铃/震动开关（新增 schedule/SchedulePrefs.kt，SharedPreferences，默认都开）。
+- 我发现构建期间源码仍在变（MainActivity 11:05 还在改）→ **kill 掉那次构建**（bash-23），等源码 60s 无改动后再重建，避免产物对应中间态。
+- 第二次（冻结源码）：`./gradlew --stop && ./gradlew test` → BUILD SUCCESSFUL（20m24s），**debug/release 各 205 用例、0 失败、0 错误、1 跳过**。
+- 然后 `scripts/build-apk.sh --quick` → ALL PASS（20/0/0），产出 1.0.3。
+
+### 产物（已独立核验）
+
+- `dist/wjx-autofill-1.0.3-universal.apk`（6182574 B），sha256 `5d31ecfdd5b0629aa1dc974f8e34f9d3b769f6c1365278e9dcd4539cb9d67cde`（sha256sum -c OK）。
+- apksigner：CN=WJX AutoFill，SHA-256 `edcce56ef5d150cc7597223ddb4380bbce328756abb4a8bd13ffbda87c708372`（与 1.0.0/1.0.1/1.0.2 同一把密钥）。
+- badging：com.wjx.autofill 1.0.3 (10003)、minSdk 24、targetSdk 35、native-code 四 ABI。
+- 单元测试 410 用例（debug/release 各 205，含新增 48：WjxTimeAdapter 15 / WjxPageOpenTime 8 / ScheduledTaskStore 17 / PendingCaptchaStore 8）。
+
+### 新发现：A9 卡在 1 条 lint Error（刷新 lint 才暴露）
+
+- 之前报告里「lintRelease 无 Error」的 PASS 读的是 **08:41 的旧 XML**；本轮我主动跑 `lintRelease` 刷新（不重新打包，APK hash 不变）后发现：
+  `id=MissingPermission`，位置 `schedule/Notifier.kt:172`（`NotificationManagerCompat.notify`）。
+- 运行期安全：`:146` 有 `canNotify(context)`（内部 checkSelfPermission）守卫，`:171-175` 用 try/catch(Throwable) 包住；
+  属 lint 跨函数分析限制，不是真 bug；`assembleRelease` 能过是因为 lintVital 只看 fatal。
+- 已把两种改法发 android-dev（同方法内显式 checkSelfPermission / @SuppressLint("MissingPermission")），并请 Lead 裁决「修一行重建」还是「记为已知偏差豁免」。
+- 已提醒 delivery 在裁决前不要发布；当前 dist/VERIFY-REPORT.md 如实记录为 PASS 17 / FAIL 1。
+
+### 报告增强
+
+- build-apk.sh 报告新增固定小节「需真机人工验证（JVM 单测覆盖不到）」，含 Lead 追加的验收点 1a：响铃/震动必须是可选项（默认开且可关，关闭后仍有高优先级全屏通知）。
+## 2026-09-22 11:50–12:10 v1.0.4（按 Lead 改判：lint 真修掉，不再豁免）
+
+### 背景（Lead 改判）
+
+- Lead 发现比 lint 更严重的问题：`schedule/Notifier.kt` 在 11:48:16 被改（lint 修复），而 dist 的 APK 是 `--skip-build` 复制的 11:38 旧包 → **仓库 HEAD 与已发布 v1.0.3 的 APK 不一致**。
+- 因此改判：不改源码的豁免方案作废，改为**真正修掉 lint 问题**并重建 v1.0.4，保证「源码 + APK」对应。
+
+### 我做的处理
+
+1. **豁免文件转为历史存档**：`dist/LINT-WAIVER.md` → `dist/LINT-WAIVER-v1.0.3-historical.md`，并在文件头写明「v1.0.4 已消除 + 脚本只认 LINT-WAIVER.md」。
+   效果：豁免机制作为可审计能力保留，但**今后任何 lint Error 都会照旧 FAIL**，不会被静默豁免。
+2. 按 Lead 给的序列跑：`./gradlew --stop && ./gradlew test lintRelease assembleRelease`（同一轮，7m15s）→ `build-apk.sh --skip-build`。
+3. 报告「构建任务」行写清来源：`--skip-build` 只校验，产物与 test/lint 证据来自紧邻的同一轮 Gradle 构建（12:03 完成）。
+
+### 结果：ALL PASS（PASS 18 / FAIL 0 / WARN 0）
+
+- 产物：`dist/wjx-autofill-1.0.4-universal.apk`（6182574 B），sha256 `b522ae12395d3d8c914e5c78da1bd4088d230324adb6a019d5cf954e27e1b96b`（sha256sum -c OK）。
+- apksigner：CN=WJX AutoFill，SHA-256 `edcce56ef5d150cc7597223ddb4380bbce328756abb4a8bd13ffbda87c708372`（与 1.0.0–1.0.3 同一把密钥）。
+- badging：1.0.4 (10004)、minSdk 24、targetSdk 35、四 ABI；无 GMS；无自研 native。
+- 单元测试：**410 用例 0 失败 0 错误**（debug/release 各 205）。
+- **lintRelease：0 条 Error**（报告带生成时间 2026-09-22 12:03:37）。
+- 源码/产物一致性复核：构建完成后近 12 分钟 main 源码 0 改动 → HEAD 与 APK 对应。
+
+### 修复内容（android-dev，仅 Notifier.kt）
+
+`notifyCaptchaFullScreen()` 在 notify 前加**同方法内**权限检查（lint 要求）：
+`SDK < 33` 直接视为已授权（POST_NOTIFICATIONS 在 API<33 不存在，直接查会恒 DENIED，会静掉 Android 7–12 的通知），
+否则 `checkSelfPermission(POST_NOTIFICATIONS) == PERMISSION_GRANTED`；并把 catch 细化为 SecurityException + Throwable 两级。

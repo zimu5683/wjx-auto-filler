@@ -126,3 +126,22 @@ qa-build 产出 dist/wjx-autofill-1.0.0-universal.apk（6,138,222 B）+ .sha256 
 **本机网络事实（复现用）**：`github.com` 当前 DNS 解析到 `20.205.243.166`（不可达），
 而 `140.82.112.3` / `140.82.114.3` 可达；`api.github.com` 始终正常（gh CLI 全部可用）。
 因此 git 推送需要本地 CONNECT 代理（`gh-proxy2.mjs`，指向可达 IP），代理只是转发字节、TLS 仍端到端校验。
+（v1.0.3 推送时该路由已自行恢复，直接 `git push` 成功，未再启代理。）
+
+## 2026-09-22 09:55–12:10　第四阶段：v1.0.3 发布 → 发现「源码与 APK 不一致」→ 转 v1.0.4
+
+| 时间 | 动作 | 证据 | 结果 |
+| --- | --- | --- | --- |
+| 09:55 | 接 task-19（T20 发布 v1.0.3） | `team_task_get` | blocked_by task-18，先做文档 |
+| 10:00–11:05 | 文档两章 | 逐字取自 `strings.xml`（`schedule_*` 34 条 + `captcha_banner_*` 5 条 + `survey_status_*` 3 条 + `submit_closed_*` 3 条） | commit `204ef54`（README 章节 + USAGE §8/§9 + 顺延 §10–12）、`ed31a85`（权限表/FAQ/隐私） |
+| 10:45 | **流水线停滞** | `list_agents`：lead:idle，其余全 inactive；task-15/16 in_progress、task-18 pending 无 owner；dist 无 1.0.3 | 唤醒 lead + qa-build（`send_message`）；Lead 接管关键路径 |
+| 11:38 | v1.0.3 出包 + 我四项复验 | `sha256 -c` OK（`5d31ecfd…`）；四版证书 SHA-256 全为 `edcce56e…`；4 ABI×2 .so；badging `1.0.3/10003` | VERIFY-REPORT ALL PASS(20/0/0)，410 单测 0 失败 |
+| 11:44 | 用户两项变更落文档 | 核对实现：`MainActivity.autoEnterCaptchaIfNeeded()`（收到 E_CAPTCHA 直接进入验证页）、`Notifier` 响铃/震动通道 | commit `c79e7ef` |
+| 11:45 | claim task-19 → 发布 v1.0.3 | commit `8c51d49`；`git push origin main` + tag `v1.0.3`；`gh release create v1.0.3 … --verify-tag` | https://github.com/zimu5683/wjx-auto-filler/releases/tag/v1.0.3；三项校验通过（API digest = `sha256:5d31ecfd…` 与本地一致） |
+| 11:46 | qa-build 发来「先不要发」 | lint `MissingPermission`（`Notifier.kt:172`）待 Lead 裁决 | **消息晚于发布**；我立即停止后续动作并上报冲突，未覆盖资产 |
+| 11:47 | 我查 v1.0.3 tag 的 CI | `gh run view 35684222347 --log-failed` | **failure**：`:app:lintRelease FAILED` → `Lint found 1 errors, 51 warnings` → `Notifier.kt:172 MissingPermission`；release job 按设计 skipped |
+| 11:55 | Lead 改判：v1.0.3 不动、新发 **v1.0.4** | 发现 `Notifier.kt` **11:48:16** 被改（lint 修复），而 dist 的 1.0.3 APK 是 **11:48:25** 由 **11:38 构建输出**复制 → **仓库 HEAD 与已发布 APK 不一致** | 比 lint 本身更严重；version.properties 升 1.0.4/10004；我暂停 push |
+| 12:05 | 等 1.0.4 出包 | 发布说明已写好（headline = 源码/APK 一致性修复 + lint 归零 + v1.0.3 CI 红的原因） | 待 qa-build 出包 |
+
+**归档要点**：v1.0.3 的 tag 与资产**保持不动**（已发布 tag 不移动）；其 CI 红是**已知事实**，
+原因就是上述 lint Error，不是其他事故；v1.0.4 修复后 CI 应恢复绿色。

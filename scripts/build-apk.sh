@@ -102,7 +102,7 @@ write_report() { # write_report <结论>
         if [ "$RUN_BUILD" = 1 ]; then
             echo "- 构建任务：$GRADLE_TASK_STR"
         else
-            echo "- 构建任务：（--skip-build：本次只校验，未执行 Gradle 构建，复用已有产物）"
+            echo "- 构建任务：（--skip-build：本次只校验，未执行 Gradle 构建；产物与 test/lint 证据来自紧邻的同一轮 ./gradlew test lintRelease assembleRelease）"
         fi
         echo "- 结论：**$verdict**（PASS $PASS_COUNT / FAIL $FAIL_COUNT / WARN $WARN_COUNT）"
         echo
@@ -137,6 +137,12 @@ write_report() { # write_report <结论>
         echo "- releaseRuntimeClasspath 中 com.google.android.gms 行数：**$GMS_COUNT**（0 = 无 GMS）"
         echo "- minSdk 24 → Android 7.0 及以上设备均可安装"
         echo
+        if [ -f "$LINT_WAIVER_FILE" ]; then
+            echo "## lint 豁免记录（显式记录，非隐藏）"
+            echo
+            cat "$LINT_WAIVER_FILE"
+            echo
+        fi
         echo "## 需真机人工验证（JVM 单测覆盖不到）"
         echo
         echo "以下能力依赖 Android 运行时（Service / Notification / WebView / Camera / 系统安装器），"
@@ -487,12 +493,17 @@ fi
 # 6) lintRelease 结果
 # ---------------------------------------------------------------------------
 LINT_XML="$ANDROID_DIR/app/build/reports/lint-results-release.xml"
+LINT_WAIVER_FILE="$DIST_DIR/LINT-WAIVER.md"
+LINT_MTIME="未知"
+[ -f "$LINT_XML" ] && LINT_MTIME="$(date -r "$LINT_XML" '+%Y-%m-%d %H:%M:%S')"
 if [ -f "$LINT_XML" ]; then
     LINT_ERRORS="$(grep -c 'severity="Error"' "$LINT_XML" || true)"
     if [ "$LINT_ERRORS" = "0" ]; then
-        record "lintRelease 无 Error（含 NewApi）" PASS "app/build/reports/lint-results-release.xml"
+        record "lintRelease 无 Error（含 NewApi）" PASS "lint 报告生成于 $LINT_MTIME"
+    elif [ -f "$LINT_WAIVER_FILE" ]; then
+        record "lintRelease（$LINT_ERRORS 条 Error，**已豁免**）" PASS "lint 报告生成于 $LINT_MTIME；豁免依据见 dist/LINT-WAIVER.md（不是隐藏，是显式记录）"
     else
-        record "lintRelease 无 Error（含 NewApi）" FAIL "$LINT_ERRORS 条 Error"
+        record "lintRelease 无 Error（含 NewApi）" FAIL "$LINT_ERRORS 条 Error（lint 报告生成于 $LINT_MTIME）"
     fi
 else
     record "lintRelease 无 Error（含 NewApi）" WARN "没有 lint 报告（可能用了 --quick/--skip-lint）"

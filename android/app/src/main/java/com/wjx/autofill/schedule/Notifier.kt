@@ -168,8 +168,16 @@ object Notifier {
         if (canUseFullScreenIntent(context)) {
             builder.setFullScreenIntent(pending, true)
         }
+        // lint MissingPermission 要求**同一方法内**能看到权限检查（它不会跟进 canNotify()）。
+        // 注意：POST_NOTIFICATIONS 在 API < 33 上不存在，直接检查会恒为 DENIED，因此必须先判 SDK。
+        val granted = Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
+            ContextCompat.checkSelfPermission(context, PERMISSION_POST_NOTIFICATIONS) ==
+            PackageManager.PERMISSION_GRANTED
+        if (!granted) return
         try {
             NotificationManagerCompat.from(context).notify(ID_CAPTCHA, builder.build())
+        } catch (_: SecurityException) {
+            // 权限在检查后被撤销的竞态：静默
         } catch (_: Throwable) {
             // 通知失败不影响主流程
         }
