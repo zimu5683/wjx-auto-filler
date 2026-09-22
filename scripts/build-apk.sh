@@ -99,7 +99,11 @@ write_report() { # write_report <结论>
         echo "- sha256：$APK_SHA"
         echo "- 大小：$APK_SIZE 字节"
         echo "- 签名：$SIGN_MODE"
-        echo "- 构建任务：$GRADLE_TASK_STR"
+        if [ "$RUN_BUILD" = 1 ]; then
+            echo "- 构建任务：$GRADLE_TASK_STR"
+        else
+            echo "- 构建任务：（--skip-build：本次只校验，未执行 Gradle 构建，复用已有产物）"
+        fi
         echo "- 结论：**$verdict**（PASS $PASS_COUNT / FAIL $FAIL_COUNT / WARN $WARN_COUNT）"
         echo
         echo "## 校验项"

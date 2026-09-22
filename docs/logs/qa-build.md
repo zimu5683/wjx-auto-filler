@@ -227,3 +227,17 @@ Lead 2026-09-22 裁定**取消 useAliVerify 本地门控**。现行口径：
 - 风险点：`WjxUrlsTest` 访问 `internal object WjxUrls`；AGP 单测有 friend-path 应可访问，但**未在 Gradle 实跑验证**。
 - 已向 Lead 提议：补跑一次 `./gradlew test`（不跑 assembleRelease → APK 字节不变）+ `build-apk.sh --skip-build` 刷新报告；等裁决。
 - APK 本身不受影响，已把核验数据同步给 delivery。
+## 2026-09-22 09:07 v1.0.2 收口（报告刷新为新鲜证据）
+
+- Lead 代跑 `./gradlew test` → BUILD SUCCESSFUL（1m53s）：test-results 刷新为 09:05，**15 个 XML（含 CookieHeaderTest）**，
+  单变体 157 用例 / 0 失败 / 0 错误 / 1 跳过。**`WjxUrlsTest` 访问 `internal object WjxUrls` 在 AGP 单测里编译+实跑通过**（friend-path 有效）。
+- 我跑 `bash scripts/build-apk.sh --skip-build` 重生成报告：**ALL PASS（PASS 18 / FAIL 0 / WARN 0）**，
+  **单元测试 314 用例 0 失败 0 错误**；APK 未重新打包，sha256 仍是 8c0c4758e73b8d0c22f51abf416017a0daa81feaf7f5acd92673a022f274d997。
+- PASS 由 20 变 18 的原因：`--skip-build` 不执行构建，少了「Gradle 构建」「Gradle daemon 环境刷新」两行。
+- 顺手修脚本措辞：`--skip-build` 时报告不再写「构建任务：test lintRelease assembleRelease」，改为「（--skip-build：本次只校验，未执行 Gradle 构建）」。
+
+### T13（task-12）最终状态
+
+- 产物：dist/wjx-autofill-1.0.2-universal.apk + .sha256 + VERIFY-REPORT.md（delivery 已独立复验四项通过，正在发 Release v1.0.2）。
+- 测试：Gradle 314 用例全过；独立 kotlinc 侧 152 用例 + QrDecodeTest 5 用例亦全过。
+- task-12 已由 Lead 结项；后续只剩 delivery 的 task-14。
