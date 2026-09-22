@@ -176,6 +176,18 @@ object WjxSubmitRequest {
 
 **验证**：冒烟 **122 PASS / 0 FAIL**（T22 +9 条：`t22.ok/pairs/skipped/allSkippedFails/blankFieldIgnored/skippedDedup/ambiguityStillFails/submitResultDefault/submitResultCopy`）→ `evidence/04-engine-smoke.log`。
 
+## 2026-09-22 · T32 WjxException 携带结构化开放时间
+
+**用户实测根因**：解析未开放问卷时开放时间只活在格式化后的 message 里，UI 拿不到结构化数据去填输入框。
+
+**改动**：
+- `WjxException` additive `val openAtMillis: Long? = null`，**放在 `cause` 之后**（保证既有 `WjxException(code, message, cause)` 三参构造点兼容）
+- 抛 `E_NOT_OPEN` 时带上 `(openTime as? OpenTime.Known)?.openAtMillis`；`Unknown` → null
+- **message 文案逐字不变**（`该问卷将于 2026-09-23 09:33 开放`），UI 两者都能用
+
+**验证**：冒烟 **126 PASS / 0 FAIL**（新增 `t32.notopen.openAt` / `t32.notopen.messageUnchanged` / `t32.javaCtor4args` / `t32.javaCtorWithCause`）→ `evidence/04-engine-smoke.log`；
+kotlinc EXIT=0 证明引擎自身 2/3 参构造点（8 处）全部兼容。⚠️ Java 调用方（Kotlin 默认参数不生效）需显式传满 4 个参数。
+
 ## 未验证 / 已知限制
 0. （T11 已推翻旧条目 1、2，保留编号便于追溯）
 1. ~~未在 useAliVerify=0 的问卷上做真实提交~~ → **T11 V6 已证明可成功（业务码 10）**；useAliVerify=1（Q0DQewW）经 V6q 实测确认为真拦截。

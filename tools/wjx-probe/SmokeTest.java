@@ -284,7 +284,20 @@ public class SmokeTest {
                 ex instanceof WjxException && SubmitErrorCode.NOT_OPEN.equals(((WjxException) ex).getCode())
                     && ((WjxException) ex).getMessage().contains("2026-09-23 09:33"),
                 String.valueOf(ex));
+            // T32：结构化开放时间必须随异常带出（UI 直接填输入框），message 文案不变
+            if (ex instanceof WjxException) {
+                eq("t32.notopen.openAt", ((WjxException) ex).getOpenAtMillis(), 1790127180000L);
+                check("t32.notopen.messageUnchanged",
+                    ((WjxException) ex).getMessage().equals("该问卷将于 2026-09-23 09:33 开放"),
+                    ((WjxException) ex).getMessage());
+            }
         }
+        // additive 兼容性：Kotlin 侧 2/3 参构造点由引擎自身编译通过证明（kotlinc EXIT=0）；
+        // Java 侧 Kotlin 默认参数不生效，必须显式传满 4 个参数。
+        WjxException legacy = new WjxException(SubmitErrorCode.PARSE, "旧构造点", null, null);
+        check("t32.javaCtor4args", legacy.getOpenAtMillis() == null && "旧构造点".equals(legacy.getMessage()), String.valueOf(legacy.getOpenAtMillis()));
+        WjxException withCause = new WjxException(SubmitErrorCode.NETWORK, "带 cause", new RuntimeException("x"), null);
+        check("t32.javaCtorWithCause", withCause.getOpenAtMillis() == null, String.valueOf(withCause.getOpenAtMillis()));
         SurveyModel openModel = WjxPageParser.INSTANCE.parse("https://v.wjx.cn/vm/P2M09FG.aspx", openHtml, new HashMap<>(), WjxTimeAdapter.INSTANCE);
         eq("parser.open.openAt", openModel.getOpenAtMillis(), 1790034767873L);
         eq("parser.open.hint", openModel.getNeedsCaptchaHint(), false);

@@ -44,6 +44,8 @@ class WjxPageOpenTimeTest {
         assertEquals(SubmitErrorCode.NOT_OPEN, thrown!!.code)
         assertTrue("文案应含开放时间，实际：" + thrown.message, thrown.message.contains("开放"))
         assertTrue("文案应是北京时间格式", Regex("""\d{4}-\d{2}-\d{2} \d{2}:\d{2}""").containsMatchIn(thrown.message))
+        // T32：结构化开放时间必须与页面解析值一致（UI 直接拿去填输入框）
+        assertEquals("openAtMillis 应等于页面解析值", future, thrown.openAtMillis)
     }
 
     @Test
@@ -74,6 +76,11 @@ class WjxPageOpenTimeTest {
         assertNotNull(thrown)
         assertEquals(SubmitErrorCode.NOT_OPEN, thrown!!.code)
         assertTrue(thrown.message.contains("2030-09-23"))
+        assertEquals(
+            "文案页的 openAtMillis 应等于按 +08:00 解析出的毫秒",
+            WjxTimeAdapter.beijingMillisOf("2030-09-23 09:33"),
+            thrown.openAtMillis,
+        )
     }
 
     @Test
@@ -115,4 +122,32 @@ class WjxPageOpenTimeTest {
         val model = WjxPageParser.parse(url, page())
         assertTrue("缺失 useAliVerify → false", !model.needsCaptchaHint)
     }
+
+    // --------------------------------------------- T32：结构化开放时间
+
+    @Test
+    fun otherErrorsCarryNullOpenAtMillis() {
+        // 只有 NOT_OPEN 且解析到时间时才非空；其它错误一律 null
+        assertNull(WjxException(SubmitErrorCode.PARSE, "问卷页面解析失败，可能是问卷已关闭或页面改版").openAtMillis)
+        assertNull(WjxException(SubmitErrorCode.PAGED, "该问卷为分页/逐题模式，暂不支持自动填写").openAtMillis)
+        assertNull(WjxException(SubmitErrorCode.NETWORK, "网络连接失败，请检查网络后重试").openAtMillis)
+    }
+
+    @Test
+    fun notOpenWithoutParsedTimeCarriesNullOpenAtMillis() {
+        // 构造一个「未开放但解析不到具体时间」的异常（防御性：Unknown 时 openAtMillis 必须为空）
+        val thrown = WjxException(SubmitErrorCode.NOT_OPEN, "该问卷暂未开放，请稍后再试")
+        assertEquals(SubmitErrorCode.NOT_OPEN, thrown.code)
+        assertNull(thrown.openAtMillis)
+    }
+
+    @Test
+    fun parseFailureDoesNotProduceNotOpenWithTime() {
+        // 解析失败（无 jqnonce）必须是 E_PARSE 且 openAtMillis 为空，不得伪造成 NOT_OPEN
+        val thrown = parseOrThrow("<html><body>没有 jqnonce</body></html>")
+        assertNotNull(thrown)
+        assertEquals(SubmitErrorCode.PARSE, thrown!!.code)
+        assertNull(thrown.openAtMillis)
+    }
+
 }

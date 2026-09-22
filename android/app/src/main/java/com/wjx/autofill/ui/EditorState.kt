@@ -21,8 +21,16 @@ class EditorState {
     /** 当前正在编辑的模板。 */
     var current: MappingTemplate = MappingTemplate.blank()
 
-    /** 最近一次「解析问卷」的结果，仅用于题目清单与字段回填。 */
+    /** 最近一次「解析问卷」的结果，仅用于题目清单与字段回填。**解析失败时必须置 null**。 */
     var survey: SurveyModel? = null
+
+    /**
+     * 最近一次解析得到的**问卷开放时间**（epoch millis）。
+     *
+     * 单独存一份而不是从 [survey] 读，是为了让「解析失败也必须收敛状态」成为结构性保证：
+     * 失败分支会把 [survey] 与它一起清空，状态条不可能再显示上一份问卷的「已开放」。
+     */
+    var parsedOpenAtMillis: Long? = null
 
     /** 最近一次并行提交的结果。 */
     var outcomes: List<GroupOutcome> = emptyList()
@@ -78,6 +86,8 @@ class EditorState {
         bundle.putInt(KEY_GROUP_INDEX, groupIndex)
         bundle.putString(KEY_LINK_STATUS, linkStatus)
         bundle.putString(KEY_TEMPLATE_STATUS, templateStatus)
+        // 开放时间用 -1 表示「无」（开放时间恒 > 0）
+        bundle.putLong(KEY_PARSED_OPEN_AT, parsedOpenAtMillis ?: -1L)
 
         val groupNames = ArrayList<String>()
         val groupSizes = ArrayList<Int>()
@@ -105,6 +115,7 @@ class EditorState {
         private const val KEY_GROUP_INDEX = "state_group_index"
         private const val KEY_LINK_STATUS = "state_link_status"
         private const val KEY_TEMPLATE_STATUS = "state_template_status"
+        private const val KEY_PARSED_OPEN_AT = "state_parsed_open_at"
         private const val KEY_GROUP_NAMES = "state_group_names"
         private const val KEY_GROUP_SIZES = "state_group_sizes"
         private const val KEY_FIELDS = "state_fields"
@@ -149,6 +160,7 @@ class EditorState {
                 .coerceIn(0, (state.current.groups.size - 1).coerceAtLeast(0))
             state.linkStatus = bundle.getString(KEY_LINK_STATUS).orEmpty()
             state.templateStatus = bundle.getString(KEY_TEMPLATE_STATUS).orEmpty()
+            state.parsedOpenAtMillis = bundle.getLong(KEY_PARSED_OPEN_AT, -1L).takeIf { it > 0L }
             return state
         }
     }

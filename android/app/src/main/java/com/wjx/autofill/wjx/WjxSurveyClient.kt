@@ -323,7 +323,12 @@ object WjxPageParser {
         val nowMillis = System.currentTimeMillis()
         val openTime = timeAdapter.parse(html, nowMillis)
         if (!WjxTimeAdapter.isOpen(openTime, nowMillis)) {
-            throw WjxException(SubmitErrorCode.NOT_OPEN, WjxTimeAdapter.notOpenMessage(openTime))
+            // message 供展示；openAtMillis 供 UI 直接填输入框（T32：结构化数据不能只活在字符串里）
+            throw WjxException(
+                SubmitErrorCode.NOT_OPEN,
+                WjxTimeAdapter.notOpenMessage(openTime),
+                openAtMillis = (openTime as? OpenTime.Known)?.openAtMillis,
+            )
         }
 
         if (isPaged(html)) throw WjxException(SubmitErrorCode.PAGED, WjxText.PAGED)

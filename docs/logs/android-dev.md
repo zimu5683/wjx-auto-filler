@@ -225,3 +225,27 @@
 - `applyParsedOpenTime` JVM 断言 **13/13 通过**（覆盖/保留/0与负值/null/往返/非法输入/用户手填不丢）
 - 只读核查：`pairList` 控件类型 = **LinearLayout**；MainActivity 中 `pairList.layoutManager|adapter` = **0**；`mappingTitle` 已接线；Lead 列的 8 个 PairAdapter 方法**全部存在**；XML 19 / Kotlin 30，资源引用零缺失
 - 说明：布局里另有 2 处 RecyclerView（结果区 `resultList`、题目清单 `questionList`），它们不在 ScrollView 内，无此问题，保持不动
+---
+
+## 18:0x task-32（T33）解析失败也必须收敛 UI 状态 + E_NOT_OPEN 自动填入
+
+### 三个缺陷 + 一个连带隐患（architect/Lead 定位）全部修掉
+1. **状态不收敛**：`EditorState` 新增 `parsedOpenAtMillis: Long?`（随 `saveTo/restoreFrom` 携带，用 -1 表示无）；
+   `currentSurveyStatus()` 改为读它 + `SurveyStatus.of(...)`，**不再依赖 `state.survey`**（后者失败时会被清空，从它推导就会沿用上一份问卷的「已开放」）。
+2. **parseSurvey 三分支全部收敛**（新增字符串无）：
+   - 成功 → `survey = model`、`parsedOpenAtMillis = model.openAtMillis`、`applyParsedOpenTime` 覆盖输入框、`renderSurveyStatus/renderSubmitButton`
+   - **E_NOT_OPEN（用户主路径）** → `survey = null`、`parsedOpenAtMillis = wjx.openAtMillis`（S1 的结构化字段）、**同样覆盖输入框**、渲染状态
+   - 其他失败 → `survey = null`、`parsedOpenAtMillis = null` → **UNKNOWN**，绝不沿用上一次成功状态
+3. **会话串号隐患**（最有价值的一条）：新增纯函数 `ui/SurveySession.kt` 的 `surveyCookiesFor(model, currentUrl)` ——
+   解析会话 cookie **只在模型 URL 与本次问卷 URL 一致**时才允许注入验证码兜底；model 为 null / URL 为空 / URL 不一致 → 返回空 Map（宁可不注入也不注入错的会话）。`launchCaptchaFor()` 已改用它。
+
+### 时间口径对齐
+`ScheduleTime` 改为**固定北京时间 (+08:00)**：问卷星页面上的开放时间就是北京时间，用户照着平台提示填；
+用设备默认时区会让不同设备显示不同时刻。已断言与引擎 `WjxTimeAdapter.formatBeijingTime` **逐字一致**。
+
+### 验证
+- 全量离线编译（31 个 .kt）：**ANDROID SOURCE COMPILE OK**
+- JVM 断言 **14/14 通过**：北京时间格式化与引擎一致、E_NOT_OPEN 覆盖/无时间保留、往返、以及 Lead 要求的**串号回归断言**（URL 不一致 / model 为 null / URL 为空 → 一律不注入）
+- ⚠️ 口径不一致（已上报）：验收写的「openAtInput 变成 2026-09-23 09:33」与 `1790040856347` **对不上** ——
+  该值独立核算（python）为 UTC 2026-09-22 01:34:16 = **北京 2026-09-22 09:34**。我的实现按页面实际值格式化，与引擎完全一致；
+  建议真机验收以「输入框值 == 平台提示的北京时间」为准，而不是硬编码字符串。

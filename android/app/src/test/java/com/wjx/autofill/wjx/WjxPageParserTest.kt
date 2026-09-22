@@ -244,4 +244,35 @@ class WjxPageParserTest {
         assertEquals(SubmitErrorCode.PAGED, thrown!!.code)
         assertTrue(thrown.message.contains("分页"))
     }
+
+    // ------------------------------------------- T32：结构化开放时间（真实 fixture）
+
+    @Test
+    fun notOpenFixtureCarriesStructuredOpenTime() {
+        val file = fixtureOrSkip("tfGAWU4-notopen.html")
+        val expectedOpenAt = 1_790_127_180_000L   // 2026-09-23 09:33（北京时间）
+        // 时间守卫：该夹具的开放时刻是固定的，一旦真实时间走过它就不再是"未开放"，跳过断言避免测试过期
+        if (System.currentTimeMillis() >= expectedOpenAt) {
+            println("[skip] tfGAWU4 夹具的开放时间已过，跳过 E_NOT_OPEN 断言（不是失败）")
+            return
+        }
+        val thrown = try {
+            WjxPageParser.parse("https://www.wjx.cn/vm/tfGAWU4.aspx", file.readText(Charsets.UTF_8))
+            null
+        } catch (e: WjxException) {
+            e
+        }
+        assertNotNull("未开放页必须抛异常", thrown)
+        assertEquals(SubmitErrorCode.NOT_OPEN, thrown!!.code)
+        assertEquals("openAtMillis 必须与页面解析值一致", expectedOpenAt, thrown.openAtMillis)
+        assertTrue("message 文案不应改变，实际：" + thrown.message, thrown.message.contains("2026-09-23 09:33"))
+    }
+
+    @Test
+    fun openFixtureParsesWithItsOpenTime() {
+        val file = fixtureOrSkip("P2M09FG-open.html")
+        val model = WjxPageParser.parse("https://www.wjx.cn/vm/P2M09FG.aspx", file.readText(Charsets.UTF_8))
+        assertEquals("已开放问卷应解析成功并带上开放时间", 1_790_034_767_873L, model.openAtMillis)
+    }
+
 }

@@ -88,8 +88,17 @@ class WjxException(
     val code: String,
     override val message: String,          // 人类可读文案（不含 code 前缀）
     cause: Throwable? = null,
+    val openAtMillis: Long? = null,        // v1.0.7/T32 additive：**仅 E_NOT_OPEN 且 OpenTime.Known 时非空**（见下方语义）
 ) : Exception(message, cause)
+```
 
+> **`WjxException.openAtMillis` 语义（v1.0.7 / T32，additive）**
+> - 仅当 `code == E_NOT_OPEN` **且** `WjxTimeAdapter.parse(...)` 返回 `OpenTime.Known` 时非空（epoch millis，UTC）；`OpenTime.Unknown` 与**其它所有错误码**一律 `null`。
+> - **`message` 文案逐字不变**——结构化字段与人类文案**并存**：UI 用 `openAtMillis` 填定时任务的开放时间输入框，北京时间展示用 `WjxTimeAdapter.formatBeijingTime(millis)`。
+> - **兼容性**：字段位于 `cause` **之后**且带默认值 → Kotlin 侧既有 2/3 参构造点（引擎内 8 处）全部无需改动；**Java 调用方必须传满 4 个参数**（Kotlin 默认值对 Java 不可见）。
+> - 冒烟验证：126 PASS / 0 FAIL（`tools/wjx-probe/evidence/04-engine-smoke.log`）。
+
+```kotlin
 object SubmitErrorCode {
     const val URL = "E_URL"; const val NETWORK = "E_NETWORK"; const val HTTP = "E_HTTP"
     const val PARSE = "E_PARSE"; const val PAGED = "E_PAGED"; const val CAPTCHA = "E_CAPTCHA"
@@ -224,6 +233,8 @@ val needsCaptchaHint: Boolean = false, // 由 useAliVerify 的**值**推导（==
 > 4. 测试必须覆盖：合成 HTML 含 `useAliVerify=0` + `captchaWrap`/`wjx_captch` 标记 → `needsCaptchaHint == false`。
 >
 > **不做预检提交（用户决策，normative）**：本实现**只做页面层读取**（`useAliVerify` 的值 → `needsCaptchaHint`）**+ 响应层判定**（提交响应码 7/22 → `E_CAPTCHA`），**不发起任何额外探测请求**（不为了「探安全门」而故意发缺答/空答请求）。因此 `needsCaptchaHint == false` 的唯一结论是「页面层未提示」，是否被拦只能由**真实提交的响应**回答。
+
+> **与 `E_NOT_OPEN` 的衔接（v1.0.7/T32）**：`fetch` 因未开放而抛出 `E_NOT_OPEN` 时，`WjxException.openAtMillis` = 本次 `OpenTime.Known.openAtMillis`（§2.1）；`OpenTime.Unknown` 不会抛 `E_NOT_OPEN`（`isOpen(Unknown, now) == true`，不拦截），因此该字段与错误码一一对应。
 
 ---
 
@@ -686,6 +697,8 @@ data class SubmitResult(
 | `E_LIMIT` | 0 | 答案超过 3000 字上限（题号 %d） | 文本超长 |
 | `E_UNSUPPORTED` | 0 | 题号 %d（%s）暂不支持自动填写 | 命中 MATRIX/SLIDER/OTHER |
 | `E_NOT_OPEN` | 200 | 该问卷将于 %s 开放（%s = `yyyy-MM-dd HH:mm`，Asia/Shanghai） | `openAtMillis > now`（fetch 阶段短路，§5.2 第 7 步） |
+
+> **`E_NOT_OPEN` 的异常携带 `openAtMillis`（v1.0.7 additive，§2.1）**：`WjxException.openAtMillis` = `WjxTimeAdapter` 解析出的开放时间（epoch ms），**仅此错误码非空**。UI **必须**用它**自动填入**定时任务的开放时间输入框（用户不必手抄），并据此计算提前提醒时刻（DESIGN §13）。
 | `E_REJECTED` | 实际码 | 问卷服务端拒绝：<服务端文案> | 业务失败（HTTP 200 但响应非成功） |
 | `E_UNKNOWN` | 实际码 | 未知错误：<摘要> | 兜底 |
 
@@ -703,11 +716,15 @@ data class SubmitResult(
 - `E_UNMATCHED` → 跳到字段映射页，把明细里的字段高亮
 - `E_REJECTED` → 原文展示服务端文案（例如「请输入正确的学号」）
 - `E_NOT_OPEN` → 状态条显示开放时间（「将于 2026-09-23 09:33 开放」）；主提交按钮置灰，但**保留「仍要尝试提交」入口**（解析可能不准/服务端可能已开放）；可创建到点自动提交任务
+
+**UI 状态收敛铁律（v1.0.7，本轮 bug 的根因类别）**：**解析失败也必须收敛 UI 状态——不得沿用上一次成功解析的结果**。任何一次 `fetch`/`submit` 失败，都必须在失败分支里把**模型引用**（`state.survey`）、**状态条**、**题目清单**、**开放时间输入框**按错误码置为对应的明确值或 `UNKNOWN`，并**与成功分支一样调用状态渲染**。禁止「只更新一行文案、旧模型继续生效」。
+- 反例（本轮真实 bug）：未开放问卷解析失败后，`state.survey` 仍是上一份问卷的模型 → 状态条显示「已开放，可提交」；同时 `E_NOT_OPEN` 未携带开放时间 → 无法自动填入定时任务。
+- 正例：失败分支清空/置为 `UNKNOWN` 并重新渲染；`E_NOT_OPEN` 用 `WjxException.openAtMillis` 自动填入开放时间。
 - 其余 → 通用错误提示 + 原始 raw 可折叠查看（仅调试用；**不做 App 内日志页**，见 DESIGN.md 非目标）
 
 ### 8.4 响应分类器（`WjxResponseClassifier`，T4 实现，单点可改）
 
-> `E_NOT_OPEN` **不经过本分类器**：它是 `fetch` 阶段的短路错误（§5.2 第 7 步）；本分类器只处理 `submit` 的响应正文。
+> `E_NOT_OPEN` **不经过本分类器**：它是 `fetch` 阶段的短路错误（§5.2 第 7 步）；本分类器只处理 `submit` 的响应正文。 **`E_NOT_OPEN` 的 `WjxException` 额外携带 `openAtMillis`（§2.1），UI 用它自动填入定时任务的开放时间。**
 
 输入：HTTP 码 + 响应正文；输出：`SubmitResult`。按顺序判定（规则已按 T3 实测回填）：
 
@@ -1082,3 +1099,5 @@ internal const val JS_HARVEST =
 | 2026-09-22 | **v1.0.5（用户驱动反转）**：§7.2 改为两类规则（可跳过 vs 仍失败）+ **`skipped` 非空但 `pairs` 为空仍判失败**；新增 §7.4（`MatchOutcome.Ok.skipped`、`SubmitResult.skippedFields` additive + UI 显式列出义务 + 决策记录）；§4.4/新增 §4.5 改为**按名字 upsert**（同名覆盖保留 id）与删除行为 | 用户 / Lead / architect |
 | 2026-09-22 | **T16 实测修正**：§2.3 解析优先级由「时间戳优先」改为「**未开放文案 → `left`+`nowTime` → `qBeginDate`/`BeginDate` 兜底 → Unknown**」；补充 `qBeginDate` 是**开始/创建时间**而非开放时间的实测证据表（含 4 行三源对照）；新增 additive 辅助函数（`notOpenMessage`/`isOpen`/`millisUntilOpen`/`formatBeijingTime`/`beijingMillisOf`/`beijingTextOf`）；测试向量全部重算 | api-debug（证据）/ architect |
 | 2026-09-22 | **Lead 冻结接缝对齐（2 处）**：§7.4 字段名 `skipped` → **`skippedFields`**（与 `SubmitResult.skippedFields` 同名同义）；§7.2 第 ① 条由「字段名为空记入 skipped」改为「**空字段名直接忽略、不计入 `skippedFields`**」（空行不是用户意图，UI 的 `effectivePairs()` 已过滤）；§7.4 新增第 0 条规则 | Lead / api-debug（实现）/ architect |
+| 2026-09-22 | **v1.0.7**：§2.1 `WjxException` 增 additive `openAtMillis: Long? = null`（**仅 `E_NOT_OPEN` 时非空**）；§8.2/§8.4 补「异常携带 openAtMillis，UI 自动填入定时任务开放时间」；§8.3 新增 **UI 状态收敛铁律**（失败不得沿用上次成功结果，须置明确值/UNKNOWN 并重新渲染） | Lead / architect |
+| 2026-09-22 | **T32 细化**：§2.1 补 `WjxException.openAtMillis` 完整语义（仅 `E_NOT_OPEN`+`Known` 非空；`message` 逐字不变、结构化字段并存；Kotlin 2/3 参构造点兼容、**Java 需传满 4 参**；126 PASS 冒烟）；§2.3 补与 `E_NOT_OPEN` 的衔接说明 | api-debug（实现）/ architect |

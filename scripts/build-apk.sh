@@ -161,6 +161,13 @@ write_report() { # write_report <结论>
         echo "   Robolectric 不做真实测量、测不到该类问题，故按 Lead 裁定**不引入**（如实标注，不假装覆盖）。"
         echo "   纯逻辑部分（同名 upsert/删除、applyParsedOpenTime）已由 config/ 与 schedule/ 的 JVM 单测覆盖。"
         echo "6. 开放时间自动填入：选择问卷后开放时间自动带出；用户手改后再触发解析不得覆盖用户输入。"
+        echo "7. **解析未开放问卷的完整链路（v1.0.7 起）**：解析一份尚未开放的问卷 →"
+        echo "   ① 输入框自动填入开放时间，且**其值应等于平台提示的北京时间**"
+        echo "      （期望来源请用 WjxTimeAdapter.formatBeijingTime(millis) 现算，**不要硬编码具体日期** ——"
+        echo "       页面上的 BeginDate 是问卷创建时间，不是开放时间，两者不可混用）；"
+        echo "   ② 顶部状态条显示「尚未开放，将于 <时间> 开放」（strings.xml 的 survey_status_not_open，逐字：尚未开放，将于 %1\$s 开放），"
+        echo "      不得显示「开放时间未知」或残留的旧问卷状态；"
+        echo "   ③ 能基于该开放时间成功开启定时任务（不因解析异常中断）。"
         echo
         echo "## 复现命令"
         echo
@@ -555,6 +562,25 @@ if [ -f "$CAPTCHA_ACTIVITY" ]; then
     fi
 else
     record "CaptchaActivity 静态审查" WARN "文件不存在（$CAPTCHA_ACTIVITY），跳过"
+fi
+
+# ---------------------------------------------------------------------------
+# 9) 静态审查：submitAll() 不得依赖 state.survey（T33 回归防线）
+#    提交编排必须由 SubmitCoordinator 内部各自 fetch；复用界面上的旧 model 会串号/用过期 token。
+# ---------------------------------------------------------------------------
+MAIN_ACTIVITY="$ANDROID_DIR/app/src/main/java/com/wjx/autofill/MainActivity.kt"
+if [ -f "$MAIN_ACTIVITY" ]; then
+    SUBMIT_BODY="$(awk '/fun submitAll/{f=1} f{print} f && /^    }$/{exit}' "$MAIN_ACTIVITY")"
+    SUBMIT_SURVEY_REFS="$(printf '%s\n' "$SUBMIT_BODY" | grep -c 'state\.survey' || true)"
+    if [ -z "$SUBMIT_BODY" ]; then
+        record "submitAll 静态审查" WARN "未找到 submitAll()（函数可能改名），跳过"
+    elif [ "$SUBMIT_SURVEY_REFS" = "0" ]; then
+        record "submitAll() 不依赖 state.survey（T33）" PASS "函数体内 0 处引用（提交由 coordinator 内部 fetch）"
+    else
+        record "submitAll() 不依赖 state.survey（T33）" FAIL "函数体内仍有 $SUBMIT_SURVEY_REFS 处 state.survey 引用：$(printf '%s\n' "$SUBMIT_BODY" | grep -n 'state\.survey' | head -3 | tr '\n' ' ')"
+    fi
+else
+    record "submitAll 静态审查" WARN "MainActivity 不存在，跳过"
 fi
 
 # ---------------------------------------------------------------------------

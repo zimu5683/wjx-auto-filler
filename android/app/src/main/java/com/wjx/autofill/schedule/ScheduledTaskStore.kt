@@ -6,6 +6,7 @@ import java.io.FileOutputStream
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.util.TimeZone
 
 /** 定时任务状态（Lead 2026-09-22 冻结）。 */
 enum class TaskState { ARMED, REMINDED, RUNNING, DONE_OK, DONE_FAIL, CANCELLED }
@@ -55,23 +56,33 @@ object ScheduleMath {
         if (success) TaskState.DONE_OK else TaskState.DONE_FAIL
 }
 
-/** `yyyy-MM-dd HH:mm` 与 epoch millis 互转（纯 java.text，可离线单测）。 */
+/**
+ * `yyyy-MM-dd HH:mm` 与 epoch millis 互转（纯 java.text，可离线单测）。
+ *
+ * **固定北京时间 (+08:00)**：问卷星页面上的开放时间就是北京时间，用户是照着平台提示填的；
+ * 用设备默认时区会让同一份问卷在不同设备上显示成不同时刻，也与引擎的
+ * `WjxTimeAdapter.formatBeijingTime` 不一致。
+ */
 object ScheduleTime {
 
     private const val PATTERN = "yyyy-MM-dd HH:mm"
+
+    private val TIME_ZONE: TimeZone = TimeZone.getTimeZone("GMT+08:00")
+
+    private fun formatter(): SimpleDateFormat =
+        SimpleDateFormat(PATTERN, Locale.CHINA).apply { timeZone = TIME_ZONE }
 
     fun parse(text: String?): Long? {
         val value = text?.trim().orEmpty()
         if (value.isEmpty()) return null
         return try {
-            SimpleDateFormat(PATTERN, Locale.CHINA).apply { isLenient = false }.parse(value)?.time
+            formatter().apply { isLenient = false }.parse(value)?.time
         } catch (_: Throwable) {
             null
         }
     }
 
-    fun format(millis: Long): String =
-        SimpleDateFormat(PATTERN, Locale.CHINA).format(Date(millis))
+    fun format(millis: Long): String = formatter().format(Date(millis))
 
     /**
      * 解析结果 → 开放时间输入框的值（纯函数，可 JVM 单测）。

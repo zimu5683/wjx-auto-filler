@@ -333,4 +333,29 @@ WjxTimeAdapter.kt:38 的文件头注释仍写「1. **时间戳优先**」，与�
 - 契约 §7.4 改：`MatchOutcome.Ok` 字段名 `skipped` → **`skippedFields`**；规则新增第 0 条（空字段名直接忽略）；标题同步
 - 变更记录加行；grep 复查无残留 `skipped`/`Ok.skipped` 表述
 - 已通知 api-debug 与 qa-build（按冻结签名写测试）
+## 补充 18：v1.0.7 契约同步（task-33）
+
+### 落盘
+- 契约 §2.1：`WjxException` 增 additive `openAtMillis: Long? = null`（**仅 `E_NOT_OPEN` 时非空**），与 `SurveyModel.openAtMillis` 同源同义
+- 契约 §8.2 E_NOT_OPEN 行后补说明：异常携带 openAtMillis，UI **必须**用它自动填入定时任务的开放时间输入框；§8.4 同步
+- 契约 §8.3 新增 **UI 状态收敛铁律**（本轮 bug 根因类别）：失败分支不得沿用上一次成功解析的结果（`state.survey`/状态条/题目清单/开放时间框都要置明确值或 UNKNOWN，并与成功分支一样渲染）
+- DESIGN §4.1 新增第 6 条原则；§13.1 补开放时间自动填入口径；两处变更记录加行
+
+### 复核代码发现的现状（已上报 lead 与 android-dev）
+1. `WjxErrors.kt:8-12` 的 `WjxException` **尚无** `openAtMillis` → 待 api-debug 加（契约已先行冻结）
+2. `MainActivity.kt` 的失败分支未收敛状态（正是本轮 bug）：
+   - `:585` `state.survey = model` 只在 onSuccess；`:603-608` onFailure **未清空 `state.survey`**、**未调用 `renderSurveyStatus()`** → 状态条继续显示上一份问卷的「已开放，可提交」
+   - 连带影响：`:880` `state.survey?.cookies`（验证码兜底注入）会拿到**上一份问卷的旧 cookie** → 会话串号风险
+   - `:588-592` 开放时间自动填入只在 onSuccess；`E_NOT_OPEN`（失败路径）不填 → 需用新的 `WjxException.openAtMillis`
+3. 建议（已转达）：onFailure 中 `state.survey = null`（或置 UNKNOWN 快照）+ `renderSurveyStatus()` + 用 `WjxException.openAtMillis` 填开放时间
+## 补充 19：T32 语义细化（api-debug 落盘后）
+
+- §2.1 补 `WjxException.openAtMillis` 完整语义：仅 `E_NOT_OPEN` **且** `OpenTime.Known` 时非空（epoch ms, UTC）；`Unknown` 与其它错误码一律 null；**message 文案逐字不变**，结构化字段与文案并存（UI 填输入框用 openAtMillis、北京时间展示用 formatBeijingTime）；兼容性注明「字段在 cause 之后带默认值 → Kotlin 2/3 参构造点（引擎内 8 处）无需改动；**Java 调用方需传满 4 参**」；冒烟 126 PASS / 0 FAIL 记录在案
+- §2.3 补与 E_NOT_OPEN 的衔接：抛 E_NOT_OPEN 时该字段 = 本次 Known.openAtMillis；Unknown 不会抛 E_NOT_OPEN（isOpen(Unknown)=true）→ 字段与错误码一一对应
+- 变更记录加行
+### 自检修复（本轮发现）
+- 上一轮（task-33）我用单行锚点 `^class WjxException\(` 替换整段，导致 §2.1 **残留一份重复的类字段片段**（val code/message/cause + `) : Exception(...)` 悬空在 SubmitErrorCode 代码块前）
+- 本轮补语义块时该片段被分隔成独立代码块而暴露；已删除残留，§2.1 现在是「WjxException 代码块 → 语义引用块 → SubmitErrorCode 代码块 → 为什么需要它」四段结构
+- 复查：代码围栏 34 行（偶数、配对），`    val code: String,` 仅 1 处；冻结块（SurveyModel/SubmitResult/WjxSurveyClient/WjxSubmitter）读回逐行确认括号完整
+- 教训（第二次同类）：**单行锚点若位于多行结构内部，替换必须包含该结构的闭合部分**；跨轮编辑后应读回结构确认，而不只看工具返回 OK
 

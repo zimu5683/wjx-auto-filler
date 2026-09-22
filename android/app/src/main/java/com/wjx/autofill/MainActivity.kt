@@ -52,6 +52,7 @@ import com.wjx.autofill.ui.PairAdapter
 import com.wjx.autofill.ui.QuestionAdapter
 import com.wjx.autofill.ui.SubmitResultAdapter
 import com.wjx.autofill.ui.SurveyOpenState
+import com.wjx.autofill.ui.surveyCookiesFor
 import com.wjx.autofill.ui.SurveyStatus
 import com.wjx.autofill.update.AppUpdater
 import com.wjx.autofill.update.UpdateChecker
@@ -329,9 +330,15 @@ class MainActivity : AppCompatActivity() {
 
     // ------------------------------------------------------------------ 状态条 / 横幅 / 定时
 
-    /** 当前问卷开放状态：优先页面解析值（T16 接线点），其次用户在定时任务里填的开放时间。 */
-    private fun currentSurveyStatus(): SurveyStatus = SurveyStatus.fromModel(
-        model = state.survey,
+    /**
+     * 当前问卷开放状态：优先**本次解析结果**（[EditorState.parsedOpenAtMillis]），
+     * 其次用户在定时任务里填的开放时间。
+     *
+     * 刻意不读 `state.survey`：解析失败时它会被清空，若从它推导就可能沿用上一份问卷的状态
+     * （用户实测「明明未开放却显示已开放，可提交」）。
+     */
+    private fun currentSurveyStatus(): SurveyStatus = SurveyStatus.of(
+        parsedOpenAtMillis = state.parsedOpenAtMillis,
         scheduledOpenAtMillis = scheduleTask?.openAtMillis,
         now = System.currentTimeMillis(),
     )
@@ -583,6 +590,7 @@ class MainActivity : AppCompatActivity() {
                     }
                     result.onSuccess { model ->
                         state.survey = model
+                        state.parsedOpenAtMillis = model.openAtMillis
                         // 用户要求：解析到开放时间就**强制覆盖**输入框；解析不到则保留原值并提示。
                         val parsedOpenAt = model.openAtMillis
                         binding.openAtInput.setText(
@@ -599,12 +607,38 @@ class MainActivity : AppCompatActivity() {
                         }
                         renderLink()
                         renderSurveyStatus()
+                        renderSubmitButton()
                         showQuestionPicker(model)
                     }.onFailure { throwable ->
-                        val human = (throwable as? WjxException)?.message
-                            ?: throwable.message.orEmpty()
-                        state.linkStatus = getString(R.string.parse_failed, human)
+                        // **核心原则：解析失败也必须收敛 UI 状态**，绝不留下上一份问卷的痕迹。
+                        val wjx = throwable as? WjxException
+                        state.survey = null
+                        when (wjx?.code) {
+                            SubmitErrorCode.NOT_OPEN -> {
+                                // 未开放（用户主路径）：异常携带**结构化**开放时间（T32），强制覆盖输入框。
+                                // 解析成功用 SurveyModel.openAtMillis；两者都为 null 时 applyParsedOpenTime 保留原值。
+                                val openAt = wjx.openAtMillis
+                                state.parsedOpenAtMillis = openAt
+                                binding.openAtInput.setText(
+                                    ScheduleTime.applyParsedOpenTime(
+                                        binding.openAtInput.text?.toString(),
+                                        openAt,
+                                    ).orEmpty(),
+                                )
+                                state.linkStatus = wjx.message
+                            }
+
+                            else -> {
+                                state.parsedOpenAtMillis = null
+                                state.linkStatus = getString(
+                                    R.string.parse_failed,
+                                    wjx?.message ?: throwable.message.orEmpty(),
+                                )
+                            }
+                        }
                         renderLink()
+                        renderSurveyStatus()
+                        renderSubmitButton()
                     }
                 }
             }
@@ -877,7 +911,8 @@ class MainActivity : AppCompatActivity() {
         // §13.3 方向①：优先注入该组引擎会话 cookie；其次用落盘的现场；最后退回解析时的会话。
         pendingCaptchaCookies = coordinator.lastSessionCookies(index)
             .ifEmpty { pendingCaptchaCookies }
-            .ifEmpty { state.survey?.cookies.orEmpty() }
+            // 串号防护：解析会话只在**与本次问卷 URL 一致**时才可注入（见 surveyCookiesFor）。
+            .ifEmpty { surveyCookiesFor(state.survey, template.surveyUrl) }
         captchaLauncher.launch(
             CaptchaActivity.intent(this, template.surveyUrl, pendingCaptchaCookies),
         )

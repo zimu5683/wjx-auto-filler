@@ -9,6 +9,16 @@ class WjxException(
     val code: String,
     override val message: String,
     cause: Throwable? = null,
+    /**
+     * 结构化开放时间（epoch millis，UTC）。**additive（T32，契约 §2.3）**：
+     * 仅在 [SubmitErrorCode.NOT_OPEN] 且页面解析到时间时非空；其它错误与解析失败一律为 null。
+     *
+     * 为什么需要它：开放时间若只活在格式化后的 [message] 里，UI 只能拿到字符串、无法直接填进输入框。
+     * **message 文案保持不变**（UI 仍可用 message 展示，两者并存）。
+     *
+     * 位置说明：放在 [cause] **之后**并带默认值，既有 3 参构造点 `WjxException(code, message, cause)` 全部兼容。
+     */
+    val openAtMillis: Long? = null,
 ) : Exception(message, cause)
 
 /**
