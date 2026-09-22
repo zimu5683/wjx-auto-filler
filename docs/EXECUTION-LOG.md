@@ -13,8 +13,8 @@
 | 应用名 / 包名 | 问卷自动填表 / `com.wjx.autofill` |
 | 团队 | Lead + 5 个 Agent：architect（方案设计）、api-debug（接口调试）、android-dev（安卓开发）、qa-build（测试打包）、delivery（交付上传） |
 | 仓库 | https://github.com/zimu5683/wjx-auto-filler （public） |
-| Release | v1.0.0 / v1.0.1 / v1.0.2 / v1.0.3 / v1.0.4 / **v1.0.5（最终交付）** |
-| 最终 APK | `dist/wjx-autofill-1.0.5-universal.apk`（6158366 B，sha256 `7cbb7982d77d2d7d…`） |
+| Release | v1.0.0 / v1.0.1 / v1.0.2 / v1.0.3 / v1.0.4 / v1.0.5 / **v1.0.6（最终交付）** |
+| 最终 APK | `dist/wjx-autofill-1.0.6-universal.apk`（6175666 B，sha256 `6b5672a118dc8cff…`） |
 | 功能范围 | 二维码识别 → 问卷星纯接口自动填表 → 自定义字段映射（**支持超量预填**）→ 模板保存/载入/删除 → 应用内更新 → 定时自动提交（前台常驻）→ 人机验证检测（**直接进入验证页**） |
 | 签名密钥 | `~/wjx-release/wjx-release.keystore`（**不入库**），证书 SHA-256 `ED:CC:E5:6E:F5:D1:50:CC:75:97:22:3D:DB:43:80:BB:CE:32:87:56:AB:B4:A8:BD:13:FF:BD:A8:7C:70:83:72` |
 
@@ -218,6 +218,40 @@ teammate 继承 Lead 的 root model（`dsh-experimental-agent-team` 的 `root.op
 - 上一轮三 Agent 掉线后，本轮全部恢复正常；**android-dev 改为「原子批次 + 每批编译」**（删横幅→编译→模板→编译→跳过字段→编译），未再出现半成品状态
 - **qa-build 再次抓到"证据新鲜度"问题**：曾误判 `left+nowTime` 路径坏了（fixture 的 `nowTime` 带秒），实测发现实现已兼容 `HH:mm:ss`/`HH:mm`，于是**修正自己的断言而不是误报缺陷**
 - **architect** 把两处契约与冻结接缝的不一致（`skipped` vs `skippedFields`、空字段名语义）按 Lead 裁定统一
+
+---
+
+## 4.7 第四轮：v1.0.6（映射列表 UI bug + 开放时间自动填入）
+
+用户装 v1.0.5 实测后反馈两点。
+
+### 问题 1 · 「字段映射只能看到 4 行」——**真 UI bug，不是设计限制**
+
+用户原话：*"确实是无上限，但是却只能显示四个，且没有滑动条，让我误以为填写第五个的时候第一个消失了"*。
+
+**澄清**：代码与契约里**没有字段条数上限**；`concurrency`（默认 2、clamp 1–5）是**内容组（方案）的并发数**，与字段条数无关。
+
+**根因（Lead 排查）**：`pairList` 是 **`ScrollView` 内嵌的 `RecyclerView`**（父链高度全 `wrap_content`、未调 `setHasFixedSize`、`nestedScrollingEnabled=false`）。这类"嵌套滚动 + 动态增长"在条目增加后不会可靠重新测量/增长，而内嵌滚动又被关闭 → **超出的行既不可见也不可滚**。
+
+**修法**：`pairList` → **动态填充的 LinearLayout**（复用行布局），高度自然增长、由外层 ScrollView 滚动；`PairAdapter` 重写但**8 个公开方法签名全保留** → `MainActivity` 仅改 3 类地方，回归面压到最小；标题显示「字段映射（N 条）」，让"没有上限"一眼可见。
+
+### 问题 2 · 开放时间需手输
+
+`renderSchedule()` 只在**已存在定时任务**时回填 `openAtInput`，解析问卷后不回填。
+**修法**（用户选择"每次解析强制覆盖"）：新增纯函数 `ScheduleTime.applyParsedOpenTime(current, parsed)` —— 解析到 → 覆盖；解析不到 → **保留原值** + 提示，不静默清空。
+
+### 顺带修复（团队自查）
+
+**`SurveyStatus.fromModel()` 原先把 parsed 传 `null`**（T16 遗留 TODO）→ **顶部状态条从未真正显示过"已开放/尚未开放"**，始终走 UNKNOWN 分支。现读 `model.openAtMillis`。
+
+### 测试取舍（Lead 裁定）
+
+android-dev 提出「`PairAdapter` 现在依赖 `android.view`，要不要引入 Robolectric」。**裁定不引入**：
+1. Robolectric **测不到这次的 bug** —— 问题本质是"嵌套 RecyclerView 不重新测量"，属**真实布局测量**行为，Robolectric 不做真实测量；
+2. 代价不小（新依赖 + 本机 2GB 内存下测试更慢），收益只是覆盖适配器内部列表逻辑；
+3. 真正的验证只能靠真机。
+→ 改为在 VERIFY-REPORT **如实标注**：「映射行显示/滚动行为本轮**无 JVM 单测覆盖**，需真机验证连续加 8 条是否全部可见可编辑」。**如实标注胜过假装覆盖。**
+qa-build 另补了可测的数据层：`EditorStateTest`（一次加 8 条全保留、删中间行保序等）+ `ScheduleTimeTest`（覆盖/保留两分支）。
 
 ---
 
