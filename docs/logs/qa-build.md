@@ -371,3 +371,35 @@ Lead 2026-09-22 裁定**取消 useAliVerify 本地门控**。现行口径：
 
 - 「需真机人工验证」第 5 条：加 8 条字段映射应全部可见/可编辑/页面可滚/无内嵌滚动条；并注明「映射行本轮无 JVM 覆盖，PairAdapter 依赖 android.view 且问题属真实布局测量，Robolectric 测不到，故不引入」。
 - 新增「本版关键修复（v1.0.6，人工维护）」小节：① 映射列表 4 行不可滚（ScrollView 内嵌 RecyclerView 不重测）② SurveyStatus.fromModel() parsed=null 导致顶部状态条从未显示已开放/未开放 ③ 匹配规则可跳过 vs 仍失败（v1.0.5 起）。
+## 2026-09-22 18:00–19:00 T35 构建 v1.0.7
+
+### 测试（新增 24 用例/变体，总数 482 → 530）
+
+- **新增 SurveyStatusTest（12）**：`SurveyStatus.of` 收敛口径 —— parsed 未到点 → NOT_OPEN；parsed 空 → **UNKNOWN**（含 `fromModel(null,null,now)` 即使 now=Long.MAX_VALUE 也 UNKNOWN，即本轮 bug 的断言化）；parsed 优先于手填；0/负值视为缺失；等号边界算已开放。
+- **新增 SurveySessionTest（7）**：`surveyCookiesFor(model, currentUrl)` 串号回归 —— URL 不一致 / model null / URL 空 → 必须空 Map；同域不同问卷也视为不同；两侧 trim 后才放行。
+- **WjxPageOpenTimeTest 扩到 11**：E_NOT_OPEN 的 `WjxException.openAtMillis` == 页面解析值；其它错误码 / Unknown → null；解析失败不得伪造成 NOT_OPEN。
+- **WjxPageParserTest 扩到 11**：真实 fixture `tfGAWU4-notopen.html` → NOT_OPEN + openAtMillis==1790127180000 + message 含「2026-09-23 09:33」；`P2M09FG-open.html` → 解析成功且 openAtMillis==1790034767873。
+  · fixture 用例带**时间守卫**：真实时间走过该开放时刻后自动跳过并打印原因，避免测试过期变红。
+- 独立 kotlinc 全量：**22 个测试类 / 253 用例 OK**。
+
+### 新增静态回归防线（build-apk.sh 第 9 节）
+
+- awk 截取 `submitAll()` 函数体 → grep `state.survey` → 必须 0 处；报告里体现为一行独立检查。
+- 本轮实测 PASS：「函数体内 0 处引用（提交由 coordinator 内部 fetch）」。以后有人把 state.survey 塞回提交路径，报告会直接 FAIL。
+
+### 构建：ALL PASS（PASS 19 / FAIL 0 / WARN 0）
+
+- 命令：`./gradlew --stop && ./gradlew test lintRelease assembleRelease`（同一轮，14m3s）→ `bash scripts/build-apk.sh --skip-build`。
+- 产物：`dist/wjx-autofill-1.0.7-universal.apk`（6175666 B），sha256 `7a809d8c8f094c6634ac386d90b71ee32fdad108060d0d05a04207028c7da3a3`。
+- apksigner：CN=WJX AutoFill，SHA-256 `edcce56ef5d150cc7597223ddb4380bbce328756abb4a8bd13ffbda87c708372`（与 1.0.0–1.0.6 同一把密钥）。
+- badging：1.0.7 (10007)、minSdk 24、targetSdk 35、四 ABI；无 GMS；无自研 native。
+- 单元测试 **530 用例 0 失败 0 错误**（debug/release 各 265）；**lintRelease 0 条 Error**（18:46:52）；构建后 20 分钟内 main 源码 0 改动。
+
+### 报告口径修正（Lead 采纳 android-dev 的更正）
+
+- 「需真机人工验证」第 7 条改为：① 输入框值应等于**平台提示的北京时间**（期望来源用 `WjxTimeAdapter.formatBeijingTime(millis)` 现算，**不硬编码具体日期**；注明 BeginDate 是问卷创建时间、不是开放时间）② 状态条显示 strings.xml `survey_status_not_open` 逐字文案「尚未开放，将于 %1$s 开放」③ 能基于该时间成功开启定时任务。
+
+### 备注
+
+- Lead 两次以为我未开跑（构建已在后台进行中）；已回复澄清并附最终数字。
+- 我的独立预检脚本再次因「编译器 classpath 缺 kotlinx-coroutines」报假失败（harness 问题，非工程问题）；已修正，且 Gradle 全量结果为准。
