@@ -170,3 +170,33 @@
 - 验证：把离线编译脚本改成 **glob 全量源集**（29 个文件，含 Lead 新增的 SchedulePrefs.kt），并按布局 `@+id` **自动生成 ViewBinding 桩**（8 个布局 / 67 个 id 成员）→ **ANDROID SOURCE COMPILE OK**。
   （此前脚本是显式文件列表，会随新增文件陈旧；这次已根治，避免再出现假报错。）
 - 已通知 qa-build 重跑 lintRelease + 出包，并同步 Lead（说明我为何恢复编辑、可随时回退）。
+---
+
+## 15:5x task-22（T23）界面精简 + 模板管理修复 + 跳过字段可见
+
+### 1) 删除人机验证横幅
+- `activity_main.xml`：`captchaBanner`/`captchaBannerBody`/`captchaBannerAction` 整块删除（含 `bg_captcha_banner.xml`）
+- `MainActivity`：删 `renderCaptchaBanner()`、`captchaBannerAction` 监听、`lastSubmitHadCaptcha` 字段与全部赋值
+- 字符串：删 `captcha_banner_*`（6 条），新增 `captcha_pending_message`（供定时到点恢复现场用）
+- **保留**：E_CAPTCHA 直接进验证页（`autoEnterCaptchaIfNeeded`）、结果区「人工验证后重试」按钮、`startCaptchaFallback()`
+- 自检：全仓库 grep `captchaBanner|captcha_banner|lastSubmitHadCaptcha|bg_captcha_banner` = 0
+
+### 2) 模板保存 bug（根因：id 复用）
+- 新增 `config/TemplateLibrary.kt`（**Lead 冻结签名**）：`save`（同名覆盖保留原 id、异名追加用 draft 的 id）、`delete(id)`、`findByName`；同名判据 = `name.trim()` 精确相等（大小写敏感）；空名字抛 IAE
+- `EditorState`：`upsertTemplate`/`mergeTemplates` → `saveTemplateByName`/`removeTemplate`/`findTemplateByName`
+- `MainActivity.saveTemplate()`：**新名字必须换新 UUID**（否则沿用 current.id 与库里同 id 冲突，删除会误删两条）→ 这是「永远只有 1 个模板」的根因修复
+- 模板按钮行：保存 / 载入 / **删除**（先选模板再二次确认）
+- 删除导入/导出**界面入口**及其代码（`showImportDialog`/`readImportFile`/`importTemplates`/`writeExportTo`/`shareTemplates`/两个 launcher/`dialog_import_template.xml`/14 条字符串）；`config/` 的导入导出能力与单测**原样保留**
+- 自检：grep `showImportDialog|readImportFile|importTemplates|writeExportTo|shareTemplates|TemplatesJson|FileProvider` in MainActivity = 0
+
+### 3) 结果区展示被跳过的字段（配合 T22）
+- `item_submit_result.xml` 新增 `resultSkipped`（warning 色 + 浅底 chip）
+- `ResultAdapter`：**仅成功项**且 `skippedFields` 非空时显示「已跳过 N 个未匹配字段：A、B（问卷里没有这些字段，不影响本次提交）」；失败项不显示
+- `MainActivity.highlightUnmatched()`：**被跳过的字段同样在左栏高亮**（用户说的「身份证」那行）
+- 新增 `@color/warning`、`result_skipped_fields`
+
+### 验证
+- glob 全量离线编译（30 个 .kt，含 Lead 的 SchedulePrefs）：**ANDROID SOURCE COMPILE OK**
+- `TemplateLibrary` JVM 断言 **19/19 通过**（不同名 3 次→3 个；同名 2 次→1 个且覆盖+保留 id；trim 同名；大小写敏感；delete 语义；findByName；空名 IAE）
+- 只读一致性：XML 19 个 well-formed、布局/字符串/drawable 引用零缺失
+- 已知无害残留：4 条未被引用的字符串（`hint_open_at`/`hint_remind_minutes`/`schedule_saved`/`schedule_service_stopped`，均为 T17 遗留，非本次改动引入）；**为降低出包前风险未清理**

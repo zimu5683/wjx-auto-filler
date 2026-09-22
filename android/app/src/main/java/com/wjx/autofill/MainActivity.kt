@@ -1,6 +1,5 @@
 package com.wjx.autofill
 
-import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
@@ -16,19 +15,15 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
-import androidx.core.content.FileProvider
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.updatePadding
 import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.LinearLayoutManager
-import com.google.android.material.textfield.TextInputEditText
 import com.wjx.autofill.config.AnswerGroup
 import com.wjx.autofill.config.TemplateStore
-import com.wjx.autofill.config.TemplatesJson
 import com.wjx.autofill.databinding.ActivityMainBinding
-import com.wjx.autofill.databinding.DialogImportTemplateBinding
 import com.wjx.autofill.databinding.DialogQuestionPickerBinding
 import com.wjx.autofill.qr.LinkCheck
 import com.wjx.autofill.qr.QrDecoder
@@ -89,7 +84,6 @@ class MainActivity : AppCompatActivity() {
     private var state = EditorState()
     private var submitJob: Job? = null
     private var parseJob: Job? = null
-    private var pendingImportInput: TextInputEditText? = null
 
     /** 最近一次提交用的模板（人机验证兜底重试要用同一份）。 */
     private var lastSubmittedTemplate: com.wjx.autofill.config.MappingTemplate? = null
@@ -116,9 +110,6 @@ class MainActivity : AppCompatActivity() {
     private var suppressScheduleToggle = false
     private var scheduleFallbackJob: Job? = null
 
-    /** 最近一次并行提交是否被服务端要求人机验证（横幅用）。 */
-    private var lastSubmitHadCaptcha = false
-
     /**
      * 已**自动进入过**验证页但没真正发起验证（用户返回/未唤起）的组：
      * 不消耗该组机会，但禁止自动再次进入，避免「返回→自动进入」死循环。
@@ -135,16 +126,6 @@ class MainActivity : AppCompatActivity() {
     private val galleryLauncher =
         registerForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
             if (uri != null) decodeGalleryImage(uri)
-        }
-
-    private val exportLauncher =
-        registerForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
-            if (uri != null) writeExportTo(uri)
-        }
-
-    private val importFileLauncher =
-        registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-            if (uri != null) readImportFile(uri)
         }
 
     private val notificationPermissionLauncher =
@@ -308,17 +289,10 @@ class MainActivity : AppCompatActivity() {
 
         binding.saveTemplateButton.setOnClickListener { showSaveTemplateDialog() }
         binding.loadTemplateButton.setOnClickListener { showLoadTemplateDialog() }
-        binding.importTemplateButton.setOnClickListener { showImportDialog() }
-        binding.exportTemplateButton.setOnClickListener { exportLauncher.launch(TemplateStore.exportFileName()) }
-        // 长按导出 = 写入 filesDir/exports 并走系统分享（无需选择保存位置）。
-        binding.exportTemplateButton.setOnLongClickListener {
-            shareTemplates()
-            true
-        }
+        binding.deleteTemplateButton.setOnClickListener { showDeleteTemplateDialog() }
 
         binding.submitButton.setOnClickListener { submitAll() }
         binding.captchaFallbackButton.setOnClickListener { startCaptchaFallback() }
-        binding.captchaBannerAction.setOnClickListener { startCaptchaFallback() }
         binding.scheduleSwitch.setOnCheckedChangeListener { _, checked ->
             if (!suppressScheduleToggle) onScheduleToggled(checked)
         }
@@ -350,7 +324,6 @@ class MainActivity : AppCompatActivity() {
         renderPairList()
         renderResults()
         renderSurveyStatus()
-        renderCaptchaBanner()
         renderSchedule()
         renderSubmitButton()
     }
@@ -373,21 +346,6 @@ class MainActivity : AppCompatActivity() {
                 ScheduleTime.format(status.openAtMillis ?: 0L),
             )
             SurveyOpenState.OPEN -> getString(R.string.survey_status_open)
-        }
-    }
-
-    /**
-     * 人机验证横幅：**检测到必提示**；未检测到也如实说明「不等于服务端一定放行」。
-     * 不做任何预检提交（用户已决策），只用页面声明 + 提交后的真实结果。
-     */
-    private fun renderCaptchaBanner() {
-        val detected = state.survey?.useAliVerify == true
-        val visible = detected || lastSubmitHadCaptcha || state.survey != null
-        binding.captchaBanner.visibility = if (visible) View.VISIBLE else View.GONE
-        binding.captchaBannerBody.text = when {
-            lastSubmitHadCaptcha -> getString(R.string.captcha_banner_server)
-            detected -> getString(R.string.captcha_banner_detected)
-            else -> getString(R.string.captcha_banner_clear)
         }
     }
 
@@ -679,14 +637,18 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun saveTemplate(rawName: String) {
-        val name = rawName.trim()
+        val name = rawName.trim().take(60)
         if (name.isEmpty()) {
             toast(R.string.toast_template_name_required)
             return
         }
         val typedUrl = binding.linkInput.text?.toString()?.trim().orEmpty()
+        // 同名覆盖（保留原 id）；**新名字必须换新 id** —— 否则会沿用 current.id，
+        // 与库里同 id 的另一条冲突，删除时会误删两条（这正是「永远只有 1 个模板」的根因）。
+        val existing = state.findTemplateByName(name)
         val template = state.current.copy(
-            name = name.take(60),
+            id = existing?.id ?: java.util.UUID.randomUUID().toString(),
+            name = name,
             surveyUrl = typedUrl.ifBlank { state.current.surveyUrl },
             shortId = SurveyLinkValidator.shortIdOf(typedUrl).orEmpty()
                 .ifBlank { state.current.shortId },
@@ -695,7 +657,7 @@ class MainActivity : AppCompatActivity() {
                 .ifEmpty { listOf(AnswerGroup.blank()) },
         ).normalized()
         state.current = template
-        state.upsertTemplate(template)
+        state.saveTemplateByName(template)
         persist()
         state.templateStatus = getString(R.string.toast_template_saved) +
             "（共 ${state.templates.size} 个模板）"
@@ -723,145 +685,41 @@ class MainActivity : AppCompatActivity() {
             .show()
     }
 
-    private fun showImportDialog() {
-        val dialogBinding = DialogImportTemplateBinding.inflate(layoutInflater)
-        val dialog = AlertDialog.Builder(this)
-            .setTitle(R.string.dialog_import_template_title)
-            .setView(dialogBinding.root)
-            .setPositiveButton(R.string.action_import, null)
+    /** 删除模板：先选模板，再二次确认。 */
+    private fun showDeleteTemplateDialog() {
+        if (state.templates.isEmpty()) {
+            toast(R.string.toast_no_templates)
+            return
+        }
+        val labels = state.templates.map { template ->
+            "${template.name}（${template.groups.size} 组）"
+        }.toTypedArray()
+        AlertDialog.Builder(this)
+            .setTitle(R.string.action_delete_template)
+            .setItems(labels) { _, which ->
+                val template = state.templates.getOrNull(which) ?: return@setItems
+                AlertDialog.Builder(this)
+                    .setTitle(R.string.dialog_delete_template_title)
+                    .setMessage(getString(R.string.dialog_delete_template_message, template.name))
+                    .setPositiveButton(R.string.action_delete) { _, _ -> deleteTemplate(template) }
+                    .setNegativeButton(R.string.action_cancel, null)
+                    .show()
+            }
             .setNegativeButton(R.string.action_cancel, null)
-            .create()
-        dialogBinding.pickFileButton.setOnClickListener {
-            importFileLauncher.launch(
-                arrayOf("application/json", "text/plain", "application/octet-stream"),
-            )
-        }
-        dialog.setOnShowListener {
-            pendingImportInput = dialogBinding.importInput
-            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
-                val text = dialogBinding.importInput.text?.toString().orEmpty()
-                if (text.isBlank()) {
-                    toast(R.string.toast_import_empty)
-                } else {
-                    importTemplates(text)
-                    dialog.dismiss()
-                }
-            }
-        }
-        dialog.setOnDismissListener { pendingImportInput = null }
-        dialog.show()
+            .show()
     }
 
-    private fun readImportFile(uri: Uri) {
-        lifecycleScope.launch {
-            val text = withContext(Dispatchers.IO) {
-                try {
-                    contentResolver.openInputStream(uri)?.use { input ->
-                        input.readBytes().toString(Charsets.UTF_8)
-                    }
-                } catch (_: Throwable) {
-                    null
-                }
-            }
-            if (text.isNullOrBlank()) {
-                toast(R.string.import_read_failed)
-                return@launch
-            }
-            val target = pendingImportInput
-            if (target != null) {
-                target.setText(text)
-            } else {
-                importTemplates(text)
-            }
+    private fun deleteTemplate(template: com.wjx.autofill.config.MappingTemplate) {
+        state.removeTemplate(template.id)
+        if (state.current.id == template.id) {
+            state.current = state.templates.firstOrNull()
+                ?: com.wjx.autofill.config.MappingTemplate.blank()
+            state.groupIndex = 0
         }
-    }
-
-    private fun importTemplates(text: String) {
-        val report = TemplatesJson.decode(text, state.templates.map { it.id }.toSet())
-        if (report == null) {
-            val message = getString(R.string.toast_import_failed, "JSON 解析失败")
-            toast(message)
-            state.templateStatus = message
-            renderAll()
-            return
-        }
-        if (report.imported.isEmpty()) {
-            val detail = (report.failures + report.warnings).joinToString("；").ifBlank { "没有可导入的模板" }
-            val message = getString(R.string.toast_import_failed, detail)
-            toast(message)
-            state.templateStatus = message
-            renderAll()
-            return
-        }
-        state.mergeTemplates(report.imported)
         persist()
-        val summary = buildString {
-            append(getString(R.string.toast_import_ok, report.imported.size))
-            if (report.warnings.isNotEmpty()) append("；警告：").append(report.warnings.joinToString("；"))
-            if (report.failures.isNotEmpty()) append("；失败：").append(report.failures.joinToString("；"))
-        }
-        state.templateStatus = summary
-        toast(summary)
+        state.templateStatus = getString(R.string.toast_template_deleted, template.name) +
+            "（共 ${state.templates.size} 个模板）"
         renderAll()
-    }
-
-    private fun writeExportTo(uri: Uri) {
-        val content = TemplatesJson.encode(
-            templates = state.templates,
-            exportedAt = System.currentTimeMillis(),
-            appVersion = BuildConfig.VERSION_NAME,
-        )
-        lifecycleScope.launch {
-            val ok = withContext(Dispatchers.IO) {
-                try {
-                    contentResolver.openOutputStream(uri)?.use { output ->
-                        output.write(content.toByteArray(Charsets.UTF_8))
-                        output.flush()
-                    }
-                    true
-                } catch (_: Throwable) {
-                    false
-                }
-            }
-            state.templateStatus = if (ok) {
-                getString(R.string.toast_export_ok)
-            } else {
-                getString(R.string.toast_export_failed, "写入失败")
-            }
-            toast(state.templateStatus)
-            renderAll()
-        }
-    }
-
-    /** 长按导出：写入 filesDir/exports 后走系统分享。 */
-    private fun shareTemplates() {
-        val content = TemplatesJson.encode(
-            templates = state.templates,
-            exportedAt = System.currentTimeMillis(),
-            appVersion = BuildConfig.VERSION_NAME,
-        )
-        val file = store.writeExport(TemplateStore.exportFileName(), content)
-        if (file == null) {
-            toast(getString(R.string.toast_export_failed, "写入失败"))
-            return
-        }
-        val uri = try {
-            FileProvider.getUriForFile(this, "$packageName.fileprovider", file)
-        } catch (_: Throwable) {
-            toast(getString(R.string.toast_export_no_share, file.absolutePath))
-            return
-        }
-        val intent = Intent(Intent.ACTION_SEND).apply {
-            type = "application/json"
-            putExtra(Intent.EXTRA_STREAM, uri)
-            putExtra(Intent.EXTRA_SUBJECT, getString(R.string.share_template_title))
-            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-        }
-        try {
-            startActivity(Intent.createChooser(intent, getString(R.string.share_template_title)))
-        } catch (_: ActivityNotFoundException) {
-            toast(getString(R.string.toast_export_no_share, file.absolutePath))
-        }
     }
 
     private fun persist() {
@@ -928,11 +786,7 @@ class MainActivity : AppCompatActivity() {
                 state.outcomes = report.outcomes
                 state.summary = report.summary()
                 state.submitting = false
-                lastSubmitHadCaptcha = report.outcomes.any {
-                    it.result.errorCode == SubmitErrorCode.CAPTCHA
-                }
                 renderResults()
-                renderCaptchaBanner()
                 highlightUnmatched(report)
                 // 变更 1：收到 E_CAPTCHA **直接进入验证界面**，不再要求先点按钮。
                 autoEnterCaptchaIfNeeded()
@@ -954,6 +808,10 @@ class MainActivity : AppCompatActivity() {
                     fields += match.groupValues[1].trim()
                 }
             }
+        // 被跳过的未匹配字段（提交成功但字段没进问卷）同样要在左栏高亮 —— 不静默丢弃。
+        report.outcomes.forEach { outcome ->
+            outcome.result.skippedFields.forEach { fields += it.trim() }
+        }
         if (fields.isEmpty()) return
 
         val targetIndex = state.current.groups.indexOfFirst { group ->
@@ -1036,16 +894,14 @@ class MainActivity : AppCompatActivity() {
                 result = SubmitResult(
                     ok = false,
                     httpStatus = 0,
-                    message = getString(R.string.captcha_banner_server),
+                    message = getString(R.string.captcha_pending_message),
                     raw = null,
                     errorCode = SubmitErrorCode.CAPTCHA,
                 ),
             ),
         )
         state.resultVisible = true
-        lastSubmitHadCaptcha = true
         renderResults()
-        renderCaptchaBanner()
         autoEnterCaptchaIfNeeded()
     }
 
@@ -1076,11 +932,7 @@ class MainActivity : AppCompatActivity() {
             if (position >= 0) updated[position] = outcome else updated += outcome
             state.outcomes = updated.sortedBy { it.index }
             state.summary = BatchReport(state.outcomes, 0L).summary()
-            lastSubmitHadCaptcha = state.outcomes.any {
-                it.result.errorCode == SubmitErrorCode.CAPTCHA
-            }
             renderResults()
-            renderCaptchaBanner()
             when {
                 outcome.result.ok -> toast(R.string.captcha_retry_ok)
                 // 该组兜底机会已用尽（每组 1 次）；其他未兜底组的按钮仍会显示。

@@ -150,6 +150,32 @@ object WjxSubmitRequest {
 
 **证据**：`evidence/11-t11-conclusion.md`（矩阵 + JS 逐字 + 未验证项）、`11-v1..v6,v6q-*.txt|json`、脚本 `t11-submit-variant.mjs`（支持自定义 URL 与证据前缀）。
 
+## 2026-09-22 · T16 开放时间适配器 + E_NOT_OPEN + 人机验证提示
+
+**新增**：`WjxTimeAdapter.kt`（`sealed interface OpenTime{Known,Unknown}` + `interface SurveyTimeAdapter{parse(html, nowMillis)}` + `object WjxTimeAdapter`）、
+`SubmitErrorCode.NOT_OPEN`、`SurveyModel` additive `openAtMillis`/`needsCaptchaHint`、`WjxPageParser.parse(..., timeAdapter)`。
+
+**⚠️ 实测修正（推翻 Lead 事实 #1）**：`qBeginDate` **不是开放时间**。未开放问卷 tfGAWU4 三源对照：
+`qBeginDate=1790040856347` = 2026-09-22 09:34(+08)（**已过去**）｜`nowTime=09:55:25` + `left=85054s` = **2026-09-23 09:33:00**｜文案 = **2026-09-23 09:33**。
+⇒ 按"时间戳优先"会把未开放判成已开放 → 题目为空 → 误报 E_PARSE。**修正后优先级**：未开放文案 → left+nowTime → qBeginDate/BeginDate 兜底 → Unknown。
+证据：`evidence/14-time-fix.md`、`13-notopen-tfGAWU4.html`。architect 已按此更新契约 §2.3。
+
+**验证**：冒烟 +20 条；干跑 `tfGAWU4` → `errorCode=E_NOT_OPEN` / `message=该问卷将于 2026-09-23 09:33 开放`（`evidence/14-dry-run-notopen.txt`）；
+已开放问卷 → `openAtMillis=1790034767873 needsCaptchaHint=false`。fixtures：`tfGAWU4-notopen.html`、`P2M09FG-open.html`。
+
+## 2026-09-22 · T22 匹配规则改为「可跳过 vs 仍失败」（超量预填）
+
+**用户驱动反转**：映射含问卷没有的字段（如"身份证"）不应让整组提交失败。
+
+**实现**（按 Lead 冻结接缝；architect 已同步契约 §7.2/§7.4）：
+- `MatchOutcome.Ok(pairs, skippedFields: List<String> = emptyList())`（**单一真相源**，无 `skipped: Int`）
+- 未匹配到任何题目 → 计入 `skippedFields`（trim 原文、按出现顺序、同名只记一次）；**字段名为空 → 直接忽略**（不计入）
+- 歧义 / 多字段同题 / 取值不在选项 / 超长 / 不支持题型 → **仍 Fail**（不变）
+- `pairs` 为空（全被跳过）→ **仍 Fail** `E_UNMATCHED`，message「全部字段都被跳过，没有可提交的题目：<明细>」
+- `SubmitResult.skippedFields` additive，**仅在 ok=true 时透传**，不拼进 message
+
+**验证**：冒烟 **122 PASS / 0 FAIL**（T22 +9 条：`t22.ok/pairs/skipped/allSkippedFails/blankFieldIgnored/skippedDedup/ambiguityStillFails/submitResultDefault/submitResultCopy`）→ `evidence/04-engine-smoke.log`。
+
 ## 未验证 / 已知限制
 0. （T11 已推翻旧条目 1、2，保留编号便于追溯）
 1. ~~未在 useAliVerify=0 的问卷上做真实提交~~ → **T11 V6 已证明可成功（业务码 10）**；useAliVerify=1（Q0DQewW）经 V6q 实测确认为真拦截。

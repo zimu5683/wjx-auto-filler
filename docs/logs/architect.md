@@ -283,4 +283,54 @@ body: submitdata=1$…}2$…}3$…
 - 问题 1（strings.xml 缺 16 个 schedule_* + schedule 签名不一致）：Lead 裁定**冻结签名权威**，android-dev 按清单改造；补字符串属 android-dev scope
 - 问题 2（lastRun*/结果明细）：Lead 裁定**不加**，ScheduledTask 保持精简，结果由 state（DONE_OK/DONE_FAIL）+ 通知承载、失败原因用既有 errorCode 文案 —— 与 DESIGN §13.2 冻结签名一致，文档无需改
 - **新口径（用户决策）**：**不做预检提交** —— 契约 §2.3 新增独立声明「只做页面层读取（useAliVerify 值）+ 响应层判定（7/22），不发起任何额外探测请求」，§11.2 与 DESIGN §12.2 第 6 条同步；两处变更记录已加行；grep 全 docs 确认无任何暗示探测机制的表述
+## 补充 15：v1.0.5 契约改写（task-23）
+
+### 1) §7 改为两类规则（用户驱动反转，已明确记录）
+- **可跳过（skipped）**：字段名为空 / 未匹配到任何题目 → 记入 skipped，**不失败**
+- **仍失败（E_UNMATCHED）**：歧义（多命中）/ 多字段指向同一题 / 取值不在选项中 / **skipped 非空但 pairs 为空**
+- 新增 §7.4：`MatchOutcome.Ok(pairs, skipped = emptyList())`、`SubmitResult(..., skippedFields = emptyList())` 两个 additive 字段 + 5 条规则（顺序去重、仅成功时非空、不拼进 message、**UI 必须显式列出**、既有构造点兼容）
+- **决策记录写进契约正文**：第一轮「未匹配一律失败」→ v1.0.5 用户超量预填需求反转；「不静默丢弃」精神由 `skippedFields` + 结果区显式列出承载，歧义/冲突仍硬失败
+- 边界澄清：pairs 与 skipped **都为空** → `E_EMPTY`（§5.3 第 1 步）；只有 skipped 非空而 pairs 空才是 `E_UNMATCHED`；value 为空在匹配前被过滤，**不计入 skipped**
+
+### 2) §4.4/§4.5 模板 upsert 与删除（按名字）
+- 同名（trim、区分大小写）→ 覆盖内容、**保留原 id**、更新 updatedAt；新名 → 新 id 追加；同批重名 → 后者覆盖前者 + warning；id 与**不同名**模板冲突 → 重生成 id + warning
+- 实现位置点名：`ui/EditorState.upsertTemplate`（现按 id 匹配，需改为按 name）
+- 删除：移除 + 立即原子落盘；删的是当前模板 → 切到剩余第一个/空态；无撤销；不影响 schedule.json（被引用模板缺失时按 DESIGN §13 处理）
+
+### 3) DESIGN 同步
+- G4 由「必须报错」改为「可跳过但必须显式可见」；§4.2 错误表拆成两行（仍失败 vs 可跳过）
+- 两处变更记录加行
+
+### 现状核对（写文档时查过代码）
+- 代码尚未落地这两项：`WjxSubmitter.kt:199 MatchOutcome.Ok(pairs)` 无 skipped、`SurveyModel.kt:110 SubmitResult` 无 skippedFields、`EditorState.kt:55 upsertTemplate` 仍按 id 匹配 —— 契约已先行冻结，待 api-debug / android-dev 实现
+## 补充 16：T16 时间解析优先级修正（api-debug 实测）
+
+### 事实（证据 tools/wjx-probe/evidence/14-time-fix.md）
+| 来源（未开放 tfGAWU4） | 值 | +08:00 |
+|---|---|---|
+| qBeginDate | 1790040856347 | 2026-09-22 09:34:16（已过去 = 创建/开始时间） |
+| nowTime + left(85054s) | 1790042125000 + 85054s | 2026-09-23 09:33:00 |
+| 文案 | — | 2026-09-23 09:33 |
+
+→ 按 qBeginDate 比较会判「已开放」→ 题目为空 → 误报 E_PARSE（正是要修的缺陷）
+
+### 契约改动（§2.3 / §6.4 / 变更记录）
+- 解析优先级改为：**未开放文案 → left+nowTime → qBeginDate/BeginDate 兜底 → Unknown**；正则改为先精确匹配 qBeginDate（避免误取其它 BeginDate），再加合理性窗口（≥2000-01-01、≤ now+20 年）
+- 新增「qBeginDate 不是开放时间」实测证据表（三源对照）
+- 新增 additive 辅助函数（逐字取自实现）：notOpenMessage / isOpen（**Unknown 视为已开放**）/ millisUntilOpen / formatBeijingTime / beijingMillisOf（必须整串消费）/ beijingTextOf
+- 测试向量**全部重算**：文案 → 1790127180000；left+nowTime → 1790127179000（±2s 容差）；P2M09FG → 1790034767873；新增「qBeginDate 在过去但存在文案 → 取文案」的回归用例
+- DESIGN §13.1 加防复发说明 + 变更记录
+
+### 发现的一处实现注释过期（已告知 api-debug）
+WjxTimeAdapter.kt:38 的文件头注释仍写「1. **时间戳优先**」，与同文件 :71-74 的正确实现与说明矛盾 → 建议改注释，避免后人按注释回退。
+
+### 已同步 qa-build
+此前我给 qa-build 的旧向量（BeginDate=1790040856347 → Known）**已作废**，新向量已重发。
+## 补充 17：skippedFields 命名与空字段名语义对齐（Lead 冻结）
+
+- 代码核对（WjxSubmitter.kt）：:218 `MatchOutcome.Ok(pairs, skippedFields: List<String> = emptyList())`；:248 `if (field.isEmpty()) continue // 空字段名直接忽略，不计入 skipped`；:304 `Fail("全部字段都被跳过，没有可提交的题目：" + detail, E_UNMATCHED)`；:74-75 `skippedFields` 仅在 `ok=true` 且非空时回填 —— 与 Lead 冻结一致
+- 契约 §7.2 改：第 ① 条「字段名为空」由「可跳过」改为「**忽略，不计入 skippedFields**」（Lead 理由：空行是「还没填」，不是「问卷没有这个字段」；UI effectivePairs() 已过滤）；表格与注脚中所有 `skipped` 统一为 `skippedFields`
+- 契约 §7.4 改：`MatchOutcome.Ok` 字段名 `skipped` → **`skippedFields`**；规则新增第 0 条（空字段名直接忽略）；标题同步
+- 变更记录加行；grep 复查无残留 `skipped`/`Ok.skipped` 表述
+- 已通知 api-debug 与 qa-build（按冻结签名写测试）
 

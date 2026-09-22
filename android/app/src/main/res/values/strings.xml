@@ -47,27 +47,17 @@
     <string name="label_template">模板</string>
     <string name="action_save_template">保存模板</string>
     <string name="action_load_template">载入模板</string>
-    <string name="action_import_template">导入模板</string>
-    <string name="action_export_template">导出模板</string>
+    <string name="action_delete_template">删除模板</string>
     <string name="dialog_save_template_title">保存模板</string>
     <string name="dialog_load_template_title">载入模板</string>
     <string name="dialog_template_name_hint">模板名称</string>
-    <string name="dialog_import_template_title">导入模板</string>
-    <string name="dialog_import_hint">在此粘贴模板 JSON，或从文件选择</string>
-    <string name="action_pick_file">选择文件</string>
-    <string name="action_import">导入</string>
+    <string name="dialog_delete_template_title">删除模板</string>
+    <string name="dialog_delete_template_message">确定删除模板「%1$s」？此操作不可撤销。</string>
     <string name="toast_template_saved">模板已保存</string>
+    <string name="toast_template_deleted">已删除模板「%1$s」</string>
     <string name="toast_template_name_required">请填写模板名称</string>
     <string name="toast_no_templates">还没有保存过模板</string>
     <string name="toast_save_failed">保存失败：无法写入本地配置</string>
-    <string name="toast_import_empty">模板内容为空</string>
-    <string name="toast_import_failed">模板解析失败：%1$s</string>
-    <string name="toast_import_ok">已导入 %1$d 个模板</string>
-    <string name="import_read_failed">无法读取所选文件</string>
-    <string name="toast_export_ok">已导出模板 JSON</string>
-    <string name="toast_export_failed">导出失败：%1$s</string>
-    <string name="toast_export_no_share">已导出到 %1$s</string>
-    <string name="share_template_title">导出字段映射模板</string>
 
     <!-- 提交 -->
     <string name="action_submit">并行提交</string>
@@ -84,6 +74,7 @@
     <string name="result_badge_captcha">需验证</string>
     <string name="result_badge_unsupported">不支持</string>
     <string name="result_badge_empty">空答案</string>
+    <string name="result_skipped_fields">已跳过 %1$d 个未匹配字段：%2$s（问卷里没有这些字段，不影响本次提交）</string>
     <string name="result_hint_unmatched">请检查左栏字段：题号是否写对，或改用题干关键词；已高亮的行就是未匹配的字段。</string>
     <string name="result_hint_captcha">该问卷要求人机验证，纯接口无法提交；本工具不会绕过验证码。</string>
     <string name="result_hint_network">请检查网络后重试（提交不会自动重试，避免重复答卷）。</string>
@@ -195,13 +186,8 @@
     <string name="survey_status_not_open">尚未开放，将于 %1$s 开放</string>
     <string name="survey_status_open">已开放，可提交</string>
 
-    <!-- 人机验证横幅（措辞如实：检测到=必提示；未检测到≠服务端一定放行） -->
-    <string name="captcha_banner_title">该问卷涉及人机验证</string>
-    <string name="captcha_banner_detected">页面声明开启了阿里云安全校验（useAliVerify=1）。到点自动提交很可能被拦截，届时只会推送通知，请手动完成验证后重试。</string>
-    <string name="captcha_banner_server">最近一次提交被服务端要求人机验证。请手动完成验证后重试。</string>
-    <string name="captcha_banner_clear">本次解析未检测到人机验证声明；但服务端仍可能在提交时要求校验，届时只会推送通知，请手动完成验证后重试。</string>
-    <string name="captcha_banner_caveat">注意：未检测到校验声明，并不代表服务端一定放行 —— 服务端可以在任意一次提交上要求校验。本工具不会绕过验证码。</string>
-    <string name="captcha_banner_action">去完成验证</string>
+    <!-- 定时到点需要人工验证时的现场提示（结果区可见，不再是独立横幅） -->
+    <string name="captcha_pending_message">定时到点提交被服务端要求人机验证，请完成验证后重试</string>
 
     <!-- 未开放时的手动提交 -->
     <string name="submit_closed_label">尚未开放 · 立即提交</string>

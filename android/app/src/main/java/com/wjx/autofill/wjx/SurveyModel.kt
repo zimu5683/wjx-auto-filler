@@ -113,4 +113,10 @@ data class SubmitResult(
     val message: String,
     val raw: String?,
     val errorCode: String? = null,
+    /**
+     * 本次提交**被跳过**的字段名（问卷里没有这些题；按出现顺序、同名只记一次）。
+     * **additive（v1.0.5，契约 §7.4）**：只在 `ok=true` 时可能非空；失败时为空列表。
+     * UI 义务：非空时必须在结果区显式列出「已跳过 N 个字段：…」（不静默丢弃）。
+     */
+    val skippedFields: List<String> = emptyList(),
 )

@@ -31,8 +31,7 @@ rm -rf "$OUT"; mkdir -p "$OUT"
 echo "[dry-run] 编译引擎 + CLI（离线 kotlinc，不占 Gradle）..." >&2
 java -Xmx900m -cp "$CC:$STD:$COR:$TRV:$ANN" org.jetbrains.kotlin.cli.jvm.K2JVMCompiler \
   -no-stdlib -no-reflect -classpath "$STD:$COR:$ANN" -jvm-target 17 -nowarn -d "$OUT" \
-  "$ENGINE/SurveyModel.kt" "$ENGINE/WjxErrors.kt" "$ENGINE/WjxSubmitCodec.kt" \
-  "$ENGINE/WjxSurveyClient.kt" "$ENGINE/WjxSubmitter.kt" "$HERE/DryRun.kt" > "$OUT/compile.log" 2>&1 \
+  "$ENGINE"/*.kt "$HERE/DryRun.kt" > "$OUT/compile.log" 2>&1 \
   || { grep -v 'jansi\|UnsatisfiedLinkError' "$OUT/compile.log" | head -40 >&2; exit 3; }
 
 exec java -cp "$OUT:$STD:$COR:$ANN" tools.DryRunKt "$@"

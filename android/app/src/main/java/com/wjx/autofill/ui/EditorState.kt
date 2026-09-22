@@ -51,14 +51,22 @@ class EditorState {
         current = current.copy(groups = groups)
     }
 
-    fun upsertTemplate(template: MappingTemplate) {
-        val index = templates.indexOfFirst { it.id == template.id }
-        if (index >= 0) templates[index] = template else templates += template
+    /**
+     * 按**名字**保存模板：同名覆盖（保留原 id）、异名追加。
+     * 纯逻辑在 [com.wjx.autofill.config.TemplateLibrary]（可 JVM 单测）。
+     */
+    fun saveTemplateByName(draft: MappingTemplate) {
+        templates = com.wjx.autofill.config.TemplateLibrary.save(templates, draft).toMutableList()
     }
 
-    fun mergeTemplates(imported: List<MappingTemplate>) {
-        imported.forEach { upsertTemplate(it) }
+    /** 按 id 删除模板。 */
+    fun removeTemplate(id: String) {
+        templates = com.wjx.autofill.config.TemplateLibrary.delete(templates, id).toMutableList()
     }
+
+    /** 按名字查找（决定新模板要不要换 id）。 */
+    fun findTemplateByName(name: String): MappingTemplate? =
+        com.wjx.autofill.config.TemplateLibrary.findByName(templates, name)
 
     // ------------------------------------------------------------ 旋转/重建快照
 

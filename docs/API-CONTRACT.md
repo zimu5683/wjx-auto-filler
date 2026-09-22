@@ -66,7 +66,8 @@ data class SurveyModel(
     val needsCaptchaHint: Boolean = false) // T16 additive：页面层提示（useAliVerify==1）；**不可靠**，权威信号是响应码 7/22
 data class AnswerPair(val field: String, val value: String)
 data class SubmitResult(val ok: Boolean, val httpStatus: Int, val message: String, val raw: String?,
-    val errorCode: String? = null)   // Lead 2026-09-22 裁决新增（additive，带默认值：既有构造点全部兼容）
+    val errorCode: String? = null,   // Lead 2026-09-22 裁决新增（additive，带默认值：既有构造点全部兼容）
+    val skippedFields: List<String> = emptyList()) // v1.0.5 additive：被跳过的字段名（§7.4）
 
 interface WjxSurveyClient { suspend fun fetch(url: String, cookies: Map<String, String> = emptyMap()): Result<SurveyModel> }
 interface WjxSubmitter   { suspend fun submit(m: SurveyModel, answers: List<AnswerPair>, captchaToken: String? = null): SubmitResult }
@@ -154,13 +155,35 @@ sealed interface OpenTime {
 object WjxTimeAdapter : SurveyTimeAdapter
 ```
 
-**解析规则（normative）**
+**解析规则（normative；2026-09-22 按 T16 实测修正——原「时间戳优先」是错的）**
+
+> ⚠️ **`qBeginDate` 不是开放时间**：它是问卷的**开始/创建时间**。实测（未开放问卷 tfGAWU4，证据 `tools/wjx-probe/evidence/14-time-fix.md`）：
+>
+> | 来源 | 值 | 换算（+08:00） |
+> |---|---|---|
+> | `qBeginDate="1790040856347"` | 1790040856347 | **2026-09-22 09:34:16（已过去）** |
+> | `nowTime="2026-09-22 09:55:25"` + `left=85054`s | — | **2026-09-23 09:33:00** |
+> | 文案「此问卷将于 2026-09-23 09:33（北京时间）开放」 | — | **2026-09-23 09:33** |
+>
+> 按 `qBeginDate` 比较会判「已开放」→ 继续解析题目 → 题目为空 → **误报 `E_PARSE`**（正是要修的缺陷）。因此：**用文案/倒计时判定，时间戳只作兜底**。
 
 | 顺序 | 来源 | 规则 |
 |---|---|---|
-| 1 | `BeginDate="<epoch ms>"`（【实测】所有问卷页都有） | 正则 `BeginDate\s*=\s*["']?(\d{10,14})["']?`。位数 ≥ 12 → 当毫秒；位数 ≤ 11 → 当秒 ×1000。`<= 0` 或位数不在 10..14 → **跳过，走第 2 条** |
-| 2 | `<div id='divstarttime' ...>此问卷将于 YYYY-MM-DD HH:mm（北京时间）开放…` | 正则抓 `(\d{4})-(\d{2})-(\d{2})\s+(\d{2}):(\d{2})`，按 **固定 +08:00（Asia/Shanghai，无夏令时）** 解析成 epoch millis；秒按 `00` |
-| 3 | 都失败 | 返回 `OpenTime.Unknown`（**不抛异常、不失败、不禁用提交**） |
+| 1 | **未开放文案** `<div id='divstarttime' left='N'>…此问卷将于 YYYY-MM-DD HH:mm（北京时间）开放…` | 抓 `(\d{4})-(\d{2})-(\d{2})\s+(\d{2}):(\d{2})`，按**固定 +08:00** 解析；秒按 `00`。只在未开放页出现，最权威且自带本地化时间 |
+| 2 | **`left` + `nowTime`** | `left` = `<div id='divstarttime' … left='85054'>` 的倒计时秒数（`> 0`）；`nowTime = "yyyy-MM-dd HH:mm:ss"`（服务端当前时间，北京时间）→ `openAtMillis = parseBeijing(nowTime) + left*1000`。实测与文案差 ≤ 1s（**测试用 ±2s 容差**） |
+| 3 | **`qBeginDate` / `BeginDate` 时间戳**（仅兜底） | 先精确匹配 `qBeginDate\s*=\s*["']?(\d{10,14})["']?`（**变量名精确，避免误取其它 `BeginDate`**），再退到任意 `BeginDate\s*=…`。位数语义：`≤ 11` 位当秒 ×1000，`≥ 12` 位当毫秒；`≤ 0` 跳过；再加**合理性窗口**（不早于 2000-01-01、不晚于 `now + 20 年`）。已开放问卷通常命中此项（值为过去时间） |
+| 4 | 都失败 | 返回 `OpenTime.Unknown`（**不抛异常、不失败、不禁用提交**） |
+
+**辅助函数（additive 公开工具，`wjx/WjxTimeAdapter.kt`；不影响冻结签名）**
+
+```kotlin
+fun notOpenMessage(openTime: OpenTime): String   // Known → "该问卷将于 yyyy-MM-dd HH:mm 开放"；Unknown → "该问卷暂未开放，请稍后再试"
+fun isOpen(openTime: OpenTime, nowMillis: Long): Boolean   // **Unknown 视为已开放（不拦截）**；Known → nowMillis >= openAtMillis
+fun millisUntilOpen(openTime: OpenTime, nowMillis: Long): Long?  // 负值=已开放；Unknown → null
+fun formatBeijingTime(millis: Long): String      // epoch → "yyyy-MM-dd HH:mm"（GMT+08:00）
+fun beijingMillisOf(text: String): Long?         // "yyyy-MM-dd HH:mm[:ss]" → epoch；**必须整串消费**，否则 null
+fun beijingTextOf(millis: Long): String          // = formatBeijingTime
+```
 
 **硬约束**
 1. **禁止 `java.time.*`**：minSdk 24 无 java.time 且工程未启用 core library desugaring（lint NewApi 会拦）。文案兜底解析必须用 `java.util.Calendar` + `TimeZone.getTimeZone("Asia/Shanghai")`，或纯算术固定 +08:00 偏移。
@@ -174,11 +197,13 @@ object WjxTimeAdapter : SurveyTimeAdapter
 
 | 输入 | 期望 |
 |---|---|
-| `BeginDate="1790040856347"`（tfGAWU4，未开放） | `Known(1790040856347)`；`> now` → 未开放 |
-| `BeginDate="1790034767873"`（P2M09FG，已开放） | `Known(1790034767873)`；`<= now` → 已开放 |
-| `BeginDate="0"` / `BeginDate="abc"` / 缺失，且无文案 | `Unknown` |
-| 仅有 `此问卷将于 2026-09-23 09:33（北京时间）开放` | `Known(1790040856347)`（+08:00，秒=00） |
+| 未开放页 tfGAWU4（含文案「2026-09-23 09:33」） | `Known(1790127180000)`（= 2026-09-23 09:33 +08）；`isOpen(…, now)` → `false` |
+| 同上但只有 `nowTime=2026-09-22 09:55:25` + `left=85054`（无文案） | `Known(1790127179000)`，与上一行**差 1s**（用 ±2s 容差断言） |
+| 已开放页 P2M09FG（只有 `qBeginDate=1790034767873`） | `Known(1790034767873)`（兜底命中）；`isOpen(…, now)` → `true` |
+| `qBeginDate` 指向过去但**存在未开放文案** | 取**文案**的时间，**不得**用 `qBeginDate`（回归用例：防止误报 `E_PARSE`） |
+| `qBeginDate="0"` / 非数字 / 缺失，且无文案无 left | `Unknown`；`isOpen(Unknown, now)` → `true`（不拦截） |
 | 空 HTML | `Unknown` |
+| `beijingMillisOf("2026-09-23 09:33")` | `1790127180000`；`beijingMillisOf("2026-09-23")` → `null`（必须整串消费） |
 
 **`openAtMillis` / `needsCaptchaHint` 语义（`SurveyModel` additive，带默认值）**
 
@@ -406,9 +431,29 @@ data class ImportReport(
 8. 缺失必填字段（`id`/`name`/`surveyUrl`/`groups` 或 `pair.field`）→ 该模板失败，原因写入 `failures`。
 9. `surveyUrl` 不匹配正则 → 该模板失败。`shortId` 缺失 → 从 `surveyUrl` 推导 + warning；两者冲突 → **以 surveyUrl 为准** + warning。
 10. `concurrency` 越界 → clamp 到 1..5 + warning。`name` 超长 → 截断到 60 + warning。
-11. `id` 与现有配置或同批导入重复 → 重新生成 UUID + warning。
+11. `id` 与**不同名**的现有模板冲突 → 重新生成 UUID + warning（**同名**走 §4.5 的按名字覆盖，保留现有 `id`）。
 12. `pair.value` 空字符串 → 合法（语义：该题不填），不报错。
-13. 导入是**合并**语义：新模板**追加**到现有列表（第 11 条保证导入的 id 不与现有冲突）；App 内部保存（编辑同一 id）为**覆盖更新**。
+13. 导入是**按名字合并**语义（见 §4.5）：同名 → 覆盖内容并**保留现有 `id`**；新名字 → 追加并生成新 `id`。
+
+### 4.5 模板 upsert 与删除（v1.0.5：**按名字**）
+
+**upsert（保存 / 导入）**
+
+| 情形 | 行为 |
+|---|---|
+| 列表中已有**同名**模板（`name.trim()` 完全相同，**区分大小写**） | **覆盖**其内容，**保留原 `id`**，更新 `updatedAt`；不改动其他模板 |
+| 名字不重复 | 追加为新模板（生成新 `id`） |
+| 同一批导入内出现重名 | 后者覆盖前者（保留第一个的 `id`），并记 warning |
+| 传入模板的 `id` 与「不同名」的现有模板冲突 | 重新生成 `id` + warning（保证 id 唯一） |
+
+- 空名字（`name.trim()` 为空）不参与 upsert（保存/导入时按 §4.4 第 8 条判失败）。
+- **实现位置**：`ui/EditorState.upsertTemplate`（v1.0.5 由「按 `id` 匹配」改为「按 `name` 匹配」）。
+
+**删除模板**
+1. 从内存列表移除该 `id` 的模板，**立即原子落盘**（§4.4 写入策略）。
+2. 若删除的是**当前编辑中的模板** → 切换到剩余列表的第一个；列表为空则进入空态（不自动新建）。
+3. 不提供撤销/回收站（V1）；删除不可恢复（导出的 JSON 仍可重新导入）。
+4. 删除只影响 `templates.json`，不触碰 `schedule.json` 的定时任务；若被删模板正被定时任务引用 → 到点执行时按「模板不存在」处理并通知（DESIGN §13）。
 
 **写入（保存 / 导出）**
 - 位置：`context.filesDir/templates.json`（内部存储）。
@@ -524,7 +569,7 @@ data class ImportReport(
 | `startTime` | `id="starttime"` 的 `value` 属性 | `""` |
 | `captchaType` | 正则 `captchaType\s*=\s*['"]?(\d+)['"]?` | 若 `useAliVerify=1` 或 `needLoadAliVerify=1` → `2`；否则 `null`。**仅用于 `&capt=` 参数，不作门控** |
 | `useAliVerify` | 正则 `var\s+useAliVerify\s*=\s*(\d+)` | 缺失 → `false`；`1` → `true`。**仅作展示/诊断，不作门控**（Lead 2026-09-22 改判：总是先尝试提交） |
-| `openAtMillis` | `WjxTimeAdapter.parse(html, now)`：`BeginDate` 优先 → `divstarttime` 文案兜底 | `null`（不影响提交） |
+| `openAtMillis` | `WjxTimeAdapter.parse(html, now)`：**未开放文案 → `left`+`nowTime` → `qBeginDate`/`BeginDate` 兜底**（§2.3） | `null`（不影响提交） |
 | `needsCaptchaHint` | `useAliVerify` 的**值**（`== 1` → `true`）；**不看标记是否存在** | `false` |
 | `cookies` | fetch 结束后 CookieManager 快照（name→value，跳过空值） | 空 Map |
 
@@ -552,13 +597,52 @@ data class ImportReport(
 | **R2 题干包含** | 存在 `question.title.contains(field.trim())`（中文按原文子串；ASCII 忽略大小写） | 命中该题 |
 | **R3 选项文本** | 存在某题的某个 option `label == field.trim()`（先精确、再 contains） | 命中该题；若 `pair.value` 为空，则取值 = 该 option 的 `value` |
 
-### 7.2 歧义与未命中（都算失败，绝不静默丢弃）
+### 7.2 两类规则：可跳过（`skippedFields`）vs 仍失败（fail）
 
-- R2/R3 命中多个题目 → `errorCode=E_UNMATCHED`，`message="字段「<field>」匹配到多个题目（<题号列表>），请改用题号"`。
-- 全部规则未命中 → `errorCode=E_UNMATCHED`，`message="字段「<field>」未匹配到任何题目"`。
-- 两个不同 `field` 命中同一题目 → `errorCode=E_UNMATCHED`，`message="多个字段指向同一题（题号 <N>）：<字段列表>"`。
-- 任一失败 → **整次提交中止**（`ok=false, errorCode=E_UNMATCHED, httpStatus=0, raw=null`），不做「部分提交」。理由：缺字段的半份答卷会污染问卷数据，且服务端必答校验也会拒绝。
+> **v1.0.5 用户驱动反转（决策记录）**：第一轮契约是「未匹配到任何题目**一律失败**」。用户提出**超量预填**需求（同一份字段表可跨多份问卷复用，问卷里没有的字段应被忽略，而不是让整批提交失败），因此改为下面的两类规则。
+> **「不静默丢弃」的精神仍然保留**：被跳过的字段**必须**出现在 `SubmitResult.skippedFields` 里，UI **必须**在结果区显式列出（§7.4）。歧义与冲突**仍然硬失败**——它们代表用户配置有歧义，静默取舍会提交错误数据。
+
+| 类别 | 情形 | 处理 |
+|---|---|---|
+| **忽略（不是 skipped）** | ① 字段名为空（`field.trim()` 为空，即**空行**） | **直接忽略、不计入 `skippedFields`**（Lead 2026-09-22 冻结）：空行是「用户还没填」，不是「这份问卷没有这个字段」；UI 的 `effectivePairs()` 本就过滤空行 |
+| **可跳过（`skippedFields`）** | ② 未匹配到任何题目（R1/R2/R3 全不命中） | 记入 `skippedFields`，**不失败** |
+| **仍失败（`E_UNMATCHED`）** | ① 歧义：R2/R3 命中多个题目 | `message="字段「<field>」匹配到多个题目（<题号列表>），请改用题号"` |
+| **仍失败（`E_UNMATCHED`）** | ② 多个字段指向同一题 | `message="多个字段指向同一题（题号 <N>）：<字段列表>"` |
+| **仍失败（`E_UNMATCHED`）** | ③ 取值不在选项中（§7.3 的 SINGLE/DROPDOWN/MULTI 解析失败） | 见 §7.3 文案 |
+| **仍失败（`E_UNMATCHED`）** | ④ **`skippedFields` 非空但 `pairs` 为空**（全部字段都被跳过） | `message="全部字段都被跳过，没有可提交的题目：<明细>"` |
+
+- 任一「仍失败」→ **整次提交中止**（`ok=false, errorCode=E_UNMATCHED, httpStatus=0, raw=null`），不做「部分提交」。
+- **注意区分**：`pairs` 与 `skippedFields` **都为空**（即过滤后没有任何答案）由 §5.3 第 1 步的 `E_EMPTY` 处理；**只有 `skippedFields` 非空而 `pairs` 为空**才是上表第 ④ 条 `E_UNMATCHED`。
 - 失败明细最多列 5 条，其余用「等 N 项」省略，保证 message 可读且不超长。
+- `pair.value` 为空的条目在匹配之前就被过滤（§5.3 第 1 步），**不计入 `skippedFields`**——那是用户「不填」的明确意图，不是匹配失败。
+
+### 7.4 `skippedFields` 的数据契约（v1.0.5 additive）
+
+```kotlin
+// 引擎内部类型（wjx/WjxSubmitter.kt）
+sealed class MatchOutcome {
+    data class Ok(
+        val pairs: List<Pair<Int, String>>,
+        val skippedFields: List<String> = emptyList(),   // v1.0.5 additive：**未匹配到任何题目**的字段名（trim 后原文，按出现顺序、同名只记一次）
+    ) : MatchOutcome()
+    data class Fail(val message: String, val code: String) : MatchOutcome()
+}
+
+// 冻结契约（§2）additive 字段
+data class SubmitResult(
+    val ok: Boolean, val httpStatus: Int, val message: String, val raw: String?,
+    val errorCode: String? = null,
+    val skippedFields: List<String> = emptyList(), // v1.0.5 additive：本次提交被跳过的字段名
+)
+```
+
+**规则**
+0. **空字段名（空行）直接忽略**，**不计入 `skippedFields`**（Lead 冻结；见 §7.2 第 ① 条）。
+1. `skippedFields` 取值 = 字段名 `trim()` 后的原文，**按 `answers` 出现顺序**，**同名只记一次**。
+2. `skippedFields` **只在 `ok=true` 时可能非空**；失败时为空列表（失败原因由 `message` 表达）。
+3. `message` 文案不变（成功仍为「提交成功」）；跳过信息**只走结构化字段**，**不得拼进 message**（§8.1 铁律）。
+4. **UI 义务（不静默丢弃）**：`ok == true && skippedFields.isNotEmpty()` → 结果区**必须**显式显示「已跳过 N 个字段：<字段名列表>」，并提供一键回到映射页的入口。
+5. 既有构造点 `MatchOutcome.Ok(pairs)` 与 `SubmitResult(true, 200, "提交成功", raw)` **全部兼容**（默认值）。
 
 ### 7.3 值解析（命中题目之后）
 
@@ -995,3 +1079,6 @@ internal const val JS_HARVEST =
 | 2026-09-22 | §0 补用户佐证（微信扫码填写未弹人机验证）；§5.3 第 5 步补 V3/V4/V5 实测（补发校验字段会把 10 推向 7 → 最小请求形态才是正确形态） | Lead / api-debug / architect |
 | 2026-09-22 | **T18：新增 §2.3 时间适配器**（`SurveyTimeAdapter`/`OpenTime`/`WjxTimeAdapter` 逐字签名 + 解析规则 + 6 条硬约束 + 测试向量）、`SurveyModel` additive `openAtMillis`/`needsCaptchaHint`、**`E_NOT_OPEN`**（fetch 阶段短路，§5.2 第 7 步）、`needsCaptchaHint` 不可靠性四条铁律；§2.2/§6.4/§8.2/§8.3/§8.4/§12 同步 | Lead（冻结签名）/ architect |
 | 2026-09-22 | **用户决策：不做预检提交** —— §2.3 新增明确声明「只做页面层读取 + 响应层判定，不发起任何额外探测请求」，§11.2 同步 | 用户 / Lead / architect |
+| 2026-09-22 | **v1.0.5（用户驱动反转）**：§7.2 改为两类规则（可跳过 vs 仍失败）+ **`skipped` 非空但 `pairs` 为空仍判失败**；新增 §7.4（`MatchOutcome.Ok.skipped`、`SubmitResult.skippedFields` additive + UI 显式列出义务 + 决策记录）；§4.4/新增 §4.5 改为**按名字 upsert**（同名覆盖保留 id）与删除行为 | 用户 / Lead / architect |
+| 2026-09-22 | **T16 实测修正**：§2.3 解析优先级由「时间戳优先」改为「**未开放文案 → `left`+`nowTime` → `qBeginDate`/`BeginDate` 兜底 → Unknown**」；补充 `qBeginDate` 是**开始/创建时间**而非开放时间的实测证据表（含 4 行三源对照）；新增 additive 辅助函数（`notOpenMessage`/`isOpen`/`millisUntilOpen`/`formatBeijingTime`/`beijingMillisOf`/`beijingTextOf`）；测试向量全部重算 | api-debug（证据）/ architect |
+| 2026-09-22 | **Lead 冻结接缝对齐（2 处）**：§7.4 字段名 `skipped` → **`skippedFields`**（与 `SubmitResult.skippedFields` 同名同义）；§7.2 第 ① 条由「字段名为空记入 skipped」改为「**空字段名直接忽略、不计入 `skippedFields`**」（空行不是用户意图，UI 的 `effectivePairs()` 已过滤）；§7.4 新增第 0 条规则 | Lead / api-debug（实现）/ architect |

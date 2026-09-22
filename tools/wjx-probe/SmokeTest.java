@@ -290,6 +290,37 @@ public class SmokeTest {
         eq("parser.open.hint", openModel.getNeedsCaptchaHint(), false);
         eq("parser.sample.hint", sample.getNeedsCaptchaHint(), true);
 
+        // ---------- T22：可跳过 vs 仍失败（超量预填） ----------
+        List<AnswerPair> mixedPairs = Arrays.asList(
+            new AnswerPair("姓名", "接口测试"), new AnswerPair("2", "20260000001"),
+            new AnswerPair("班级", "测试班级"), new AnswerPair("身份证", "110101199001011234"));
+        MatchOutcome m22 = WjxAnswerMatcher.INSTANCE.match(sample, mixedPairs);
+        check("t22.ok", m22 instanceof MatchOutcome.Ok, String.valueOf(m22));
+        if (m22 instanceof MatchOutcome.Ok) {
+            eq("t22.pairs", ((MatchOutcome.Ok) m22).getPairs().size(), 3);
+            eq("t22.skipped", ((MatchOutcome.Ok) m22).getSkippedFields(), Arrays.asList("身份证"));
+        }
+        MatchOutcome allSkip = WjxAnswerMatcher.INSTANCE.match(sample,
+            Arrays.asList(new AnswerPair("甲", "1"), new AnswerPair("乙", "2")));
+        check("t22.allSkippedFails", allSkip instanceof MatchOutcome.Fail
+            && SubmitErrorCode.UNMATCHED.equals(((MatchOutcome.Fail) allSkip).getCode())
+            && ((MatchOutcome.Fail) allSkip).getMessage().contains("全部字段都被跳过"), String.valueOf(allSkip));
+        MatchOutcome blankField = WjxAnswerMatcher.INSTANCE.match(sample,
+            Arrays.asList(new AnswerPair("   ", "x"), new AnswerPair("姓名", "张三")));
+        check("t22.blankFieldIgnored", blankField instanceof MatchOutcome.Ok
+            && ((MatchOutcome.Ok) blankField).getSkippedFields().isEmpty()
+            && ((MatchOutcome.Ok) blankField).getPairs().size() == 1, String.valueOf(blankField));
+        MatchOutcome dedup = WjxAnswerMatcher.INSTANCE.match(sample,
+            Arrays.asList(new AnswerPair("身份证", "1"), new AnswerPair("身份证", "2"), new AnswerPair("姓名", "张三")));
+        check("t22.skippedDedup", dedup instanceof MatchOutcome.Ok
+            && ((MatchOutcome.Ok) dedup).getSkippedFields().size() == 1, String.valueOf(dedup));
+        MatchOutcome ambiguity = WjxAnswerMatcher.INSTANCE.match(mixed, Arrays.asList(new AnswerPair("您", "x")));
+        check("t22.ambiguityStillFails", ambiguity instanceof MatchOutcome.Fail, String.valueOf(ambiguity));
+        SubmitResult srDefault = WjxResponseClassifier.INSTANCE.classify(200, "10〒");
+        check("t22.submitResultDefault", srDefault.getSkippedFields().isEmpty(), srDefault.toString());
+        SubmitResult srCopied = srDefault.copy(true, 200, "提交成功", srDefault.getRaw(), null, Arrays.asList("身份证"));
+        eq("t22.submitResultCopy", srCopied.getSkippedFields(), Arrays.asList("身份证"));
+
         System.out.println("\n===== PASS=" + pass + " FAIL=" + fail + " =====");
         if (fail > 0) System.exit(1);
     }

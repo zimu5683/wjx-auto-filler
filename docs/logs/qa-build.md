@@ -325,3 +325,27 @@ Lead 2026-09-22 裁定**取消 useAliVerify 本地门控**。现行口径：
 `notifyCaptchaFullScreen()` 在 notify 前加**同方法内**权限检查（lint 要求）：
 `SDK < 33` 直接视为已授权（POST_NOTIFICATIONS 在 API<33 不存在，直接查会恒 DENIED，会静掉 Android 7–12 的通知），
 否则 `checkSelfPermission(POST_NOTIFICATIONS) == PERMISSION_GRANTED`；并把 catch 细化为 SecurityException + Throwable 两级。
+## 2026-09-22 15:30–16:05 T25 构建 v1.0.5
+
+### 测试（按 Lead 冻结契约）
+
+- **WjxAnswerMatcherTest 重写**（23 → 28 用例）：未匹配 → `Ok(skippedFields)`；空字段名 → 忽略且不计入 skippedFields；歧义/同题/取值不在选项/超长/不支持题型 → 仍 Fail；pairs 空 → Fail(E_UNMATCHED) + 「全部字段都被跳过」；skippedFields 去重/保序/trim；SubmitResult.skippedFields additive 默认空列表且不混进 message。
+- **新增 TemplateLibraryTest**（10 用例）：不同名 3 次 → 3 个；同名 2 次 → 1 个且内容覆盖 + 保留原 id；trim 同名 / 大小写敏感；同名不同 URL 仍覆盖；空名抛 IAE；delete 按 id / 找不到原样返回；findByName；**列表与持久化同步**（TemplateStore 落盘回读）。
+- **WjxTimeAdapterTest 增至 19 用例**：补 architect §2.3 优先级向量（文案优先于过去的 qBeginDate、left+nowTime 兜底 ±2s、无文案无 left 才回落时间戳、beijingMillisOf 整串消费）。
+  · 期间我以为 left+nowTime 路径坏了（fixture 的 nowTime 带秒）；实测 api-debug 15:39 已让 parseBeijingTime 同时接受 HH:mm:ss 与 HH:mm，该路径正常，我据此修正断言。
+- 独立 kotlinc 全量：**19 个测试类 / 218 用例 OK**（不含需 android.jar 的 QrDecodeTest）。
+
+### 构建：ALL PASS（PASS 18 / FAIL 0 / WARN 0）
+
+- 命令：`./gradlew --stop && ./gradlew test lintRelease assembleRelease`（同一轮，9m27s）→ `bash scripts/build-apk.sh --skip-build`。
+- 产物：`dist/wjx-autofill-1.0.5-universal.apk`（6158366 B），sha256 `7cbb7982d77d2d7d20836e2c2f422daab15e2ee5538bf9382a10620ae7ad76d0`（sha256sum -c OK）。
+- apksigner：CN=WJX AutoFill，SHA-256 `edcce56ef5d150cc7597223ddb4380bbce328756abb4a8bd13ffbda87c708372`（与 1.0.0–1.0.4 同一把密钥）。
+- badging：1.0.5 (10005)、minSdk 24、targetSdk 35、四 ABI；无 GMS；无自研 native。
+- 单元测试：**448 用例 0 失败 0 错误**（debug/release 各 224）。
+- **lintRelease：0 条 Error**（报告带生成时间 2026-09-22 16:01:48）。
+- 一致性：构建后近 12 分钟 main 源码 0 改动 → HEAD 与 APK 对应。
+
+### 备注
+
+- 我的独立预检脚本一度因「编译器 classpath 缺 kotlinx-coroutines」报假失败（harness 问题，非工程问题），已由随后的 Gradle 全量验证取代。
+- 已提醒 delivery：push 前带上未提交的 MainActivity/EditorState/ResultAdapter/wjx/config/res 改动，避免 HEAD 与 APK 不一致。

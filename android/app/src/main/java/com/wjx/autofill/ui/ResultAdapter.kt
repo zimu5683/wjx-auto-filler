@@ -2,6 +2,7 @@ package com.wjx.autofill.ui
 
 import android.content.Context
 import android.view.LayoutInflater
+import android.view.View
 import android.view.ViewGroup
 import androidx.core.content.ContextCompat
 import androidx.recyclerview.widget.RecyclerView
@@ -54,6 +55,20 @@ class SubmitResultAdapter : RecyclerView.Adapter<SubmitResultAdapter.Holder>() {
         holder.binding.resultMessage.setTextColor(
             ContextCompat.getColor(context, if (result.ok) R.color.text_secondary else R.color.error),
         )
+
+        // 用户要求：被跳过的未匹配字段**必须可见**（不是静默丢弃）。
+        // 只在成功项展示；失败项的原因已经在 message 里。
+        val skipped = result.skippedFields
+        if (result.ok && skipped.isNotEmpty()) {
+            holder.binding.resultSkipped.visibility = View.VISIBLE
+            holder.binding.resultSkipped.text = context.getString(
+                R.string.result_skipped_fields,
+                skipped.size,
+                skipped.joinToString("、"),
+            )
+        } else {
+            holder.binding.resultSkipped.visibility = View.GONE
+        }
     }
 
     private fun buildMessage(context: Context, message: String, code: String?): String {

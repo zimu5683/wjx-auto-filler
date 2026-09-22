@@ -1,6 +1,7 @@
 package com.wjx.autofill.wjx
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -142,4 +143,46 @@ class WjxTimeAdapterTest {
         assertTrue(WjxTimeAdapter.isOpen(open, 1_000_000L))
         assertTrue(WjxTimeAdapter.isOpen(open, 1_000_001L))
     }
+
+    // ------------------------------- 优先级（architect §2.3，api-debug 实测修正）
+
+    @Test
+    fun textWinsOverPastQBeginDate() {
+        // 回归用例（最重要）：qBeginDate 是"开始/创建时间"而不是开放时间。
+        // 它指向过去 + 页面有未开放文案 → 必须取文案时间，否则会被误判成已开放并误报 E_PARSE。
+        val html = "<html><script>var qBeginDate=\"1790040856347\";</script>" +
+            "<div id='divstarttime'>此问卷将于2026-09-23 09:33（北京时间）开放</div></html>"
+        assertEquals(OpenTime.Known(beijing20260923_0933), WjxTimeAdapter.parse(html, now))
+    }
+
+    @Test
+    fun leftPlusNowTimeFallbackMatchesTextWithinTwoSeconds() {
+        // 没有文案时的精确兜底：nowTime 是服务器时间，left 是剩余秒数（实测两者相加与文案差 ≤1s）
+        val html = "<html><div id='divstarttime' left='85054'></div>" +
+            "<script>var nowTime = \"2026-09-22 09:55:25\";</script></html>"
+        val parsed = WjxTimeAdapter.parse(html, now)
+        assertTrue("应解析为 Known，实际：" + parsed, parsed is OpenTime.Known)
+        val delta = (parsed as OpenTime.Known).openAtMillis - 1_790_127_179_000L
+        assertTrue("与文案口径应相差 <=2s，实际 " + delta + "ms", delta in -2_000L..2_000L)
+    }
+
+    @Test
+    fun timestampStillUsedWhenNoTextAndNoLeft() {
+        // 无文案、无 left → 才回落到 BeginDate 时间戳
+        val html = "<html><script>var BeginDate=\"1790034767873\";</script></html>"
+        assertEquals(OpenTime.Known(1_790_034_767_873L), WjxTimeAdapter.parse(html, now))
+    }
+
+    @Test
+    fun beijingMillisOfRequiresWholeStringConsumption() {
+        assertEquals(beijing20260923_0933, WjxTimeAdapter.beijingMillisOf("2026-09-23 09:33"))
+        assertNull("只有日期没有时间 -> null", WjxTimeAdapter.beijingMillisOf("2026-09-23"))
+        assertEquals(
+            "带秒必须接受（页面 nowTime 就是 HH:mm:ss，left+nowTime 兜底依赖它）",
+            beijing20260923_0933,
+            WjxTimeAdapter.beijingMillisOf("2026-09-23 09:33:00"),
+        )
+        assertNull(WjxTimeAdapter.beijingMillisOf("2026-09-23 09:33 尾巴"))
+    }
+
 }

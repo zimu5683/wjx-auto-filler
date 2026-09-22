@@ -10,4 +10,6 @@
     <color name="divider">#FFE3E6EB</color>
     <color name="success">#FF16A34A</color>
     <color name="error">#FFDC2626</color>
+    <!-- 非阻断但必须可见的提示（如被跳过的字段） -->
+    <color name="warning">#FFB45309</color>
 </resources>

@@ -69,7 +69,13 @@ class HttpWjxSubmitter(
                         conn.doOutput = true
                         conn.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
                         val (status, text) = WjxHttp.readText(conn, jar)
-                        WjxResponseClassifier.classify(status, text)
+                        val result = WjxResponseClassifier.classify(status, text)
+                        // 跳过信息只走结构化字段，且只在成功时透传（契约 §7.4 规则 2）
+                        if (result.ok && matched.skippedFields.isNotEmpty()) {
+                            result.copy(skippedFields = matched.skippedFields)
+                        } else {
+                            result
+                        }
                     }
                 }
             } catch (ce: CancellationException) {
@@ -193,10 +199,24 @@ object WjxResponseClassifier {
     }
 }
 
-/** 字段匹配结果。 */
+/**
+ * 字段匹配结果（v1.0.5）。
+ *
+ * 两类规则（契约 §7.2）：**可跳过**（问卷里没有这个字段 → 记入 [Ok.skippedFields]，不失败）
+ * vs **仍失败**（歧义 / 同题冲突 / 取值不在选项 → [Fail]）。
+ */
 sealed class MatchOutcome {
-    /** 已解析成 `topic to value`（value 已 escape / 已解析为选项 value）。 */
-    data class Ok(val pairs: List<Pair<Int, String>>) : MatchOutcome()
+    /**
+     * 已解析成 `topic to value`（value 已 escape / 已解析为选项 value）。
+     *
+     * [skippedFields]：**未匹配到任何题目**的字段名（trim 后原文，按出现顺序、同名只记一次）。
+     * **additive（v1.0.5，Lead 冻结）**：带默认值，既有 `Ok(pairs)` 构造点全部兼容。
+     * 「不静默丢弃」的精神保留：跳过的字段由 UI 在结果区显式列出（[SubmitResult.skippedFields]）。
+     */
+    data class Ok(
+        val pairs: List<Pair<Int, String>>,
+        val skippedFields: List<String> = emptyList(),
+    ) : MatchOutcome()
 
     /** 失败：[code] 取 [SubmitErrorCode]，[message] 是纯人类文案。 */
     data class Fail(val message: String, val code: String) : MatchOutcome()
@@ -205,8 +225,13 @@ sealed class MatchOutcome {
 /**
  * 字段匹配器（docs/API-CONTRACT.md §7）。纯函数，可单测。
  *
- * 规则优先级：R1 精确题号 > R2 题干包含 > R3 选项文本；歧义与未命中**都算失败**，绝不静默丢弃。
- * 任一失败整次中止（不做「部分提交」）。
+ * 规则优先级：R1 精确题号 > R2 题干包含 > R3 选项文本（**不变**）。
+ *
+ * 两类结果（v1.0.5，契约 §7.2 / §7.4）：
+ * - **可跳过**：未匹配到任何题目 → 记入 [MatchOutcome.Ok.skippedFields]，**不失败**（支持超量预填）；
+ *   字段名为空 → **直接忽略**（那是空行，不是用户意图，UI 侧本就过滤）。
+ * - **仍失败**：歧义（多题命中）/ 多字段指向同一题 / 取值不在选项中 / 超长 / 不支持题型 → 整次中止；
+ *   且 `pairs` 为空（全部被跳过）→ 仍判失败（没有可提交内容）。
  */
 object WjxAnswerMatcher {
 
@@ -214,19 +239,17 @@ object WjxAnswerMatcher {
 
     fun match(model: SurveyModel, answers: List<AnswerPair>): MatchOutcome {
         val problems = ArrayList<Problem>()
+        val skippedFields = ArrayList<String>()
         val assigned = LinkedHashMap<Int, String>()
         val pairs = ArrayList<Pair<Int, String>>()
 
         for (pair in answers) {
             val field = pair.field.trim()
-            if (field.isEmpty()) {
-                problems.add(Problem(SubmitErrorCode.UNMATCHED, "字段名不能为空"))
-                continue
-            }
+            if (field.isEmpty()) continue // 空字段名直接忽略，不计入 skipped（Lead 2026-09-22 冻结）
             val resolution = resolveQuestions(model, field)
             val hits = resolution.questions
             if (hits.isEmpty()) {
-                problems.add(Problem(SubmitErrorCode.UNMATCHED, "字段「" + field + "」未匹配到任何题目"))
+                if (skippedFields.none { it == field }) skippedFields.add(field)
                 continue
             }
             if (hits.size > 1) {
@@ -270,7 +293,17 @@ object WjxAnswerMatcher {
                 ?: SubmitErrorCode.UNMATCHED
             return MatchOutcome.Fail(summarize(problems), code)
         }
-        return MatchOutcome.Ok(pairs)
+        if (pairs.isEmpty()) {
+            // 全部字段都被跳过 → 没有可提交内容，仍判失败（契约 §7.2 第 ④ 条）
+            val detail = if (skippedFields.isEmpty()) {
+                "（没有字段）"
+            } else {
+                skippedFields.take(MAX_DETAILS).joinToString("、") +
+                    if (skippedFields.size > MAX_DETAILS) " 等 " + skippedFields.size + " 项" else ""
+            }
+            return MatchOutcome.Fail("全部字段都被跳过，没有可提交的题目：" + detail, SubmitErrorCode.UNMATCHED)
+        }
+        return MatchOutcome.Ok(pairs, skippedFields)
     }
 
     /** R1 精确题号 > R2 题干包含 > R3 选项文本（先精确再 contains），首个命中的规则即停止。 */

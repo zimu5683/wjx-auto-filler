@@ -70,55 +70,6 @@
                 android:textSize="13sp"
                 android:textStyle="bold" />
 
-            <!-- 人机验证醒目横幅（措辞如实：检测到=必提示；未检测到≠服务端一定放行） -->
-            <LinearLayout
-                android:id="@+id/captchaBanner"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="12dp"
-                android:background="@drawable/bg_captcha_banner"
-                android:orientation="vertical"
-                android:padding="12dp"
-                android:visibility="gone">
-
-                <TextView
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="@string/captcha_banner_title"
-                    android:textColor="@color/error"
-                    android:textSize="15sp"
-                    android:textStyle="bold" />
-
-                <TextView
-                    android:id="@+id/captchaBannerBody"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="4dp"
-                    android:textColor="@color/text_primary"
-                    android:textSize="13sp" />
-
-                <TextView
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="6dp"
-                    android:text="@string/captcha_banner_caveat"
-                    android:textColor="@color/text_secondary"
-                    android:textSize="12sp" />
-
-                <com.google.android.material.button.MaterialButton
-                    android:id="@+id/captchaBannerAction"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:layout_gravity="end"
-                    android:layout_marginTop="6dp"
-                    android:insetTop="0dp"
-                    android:insetBottom="0dp"
-                    android:minWidth="0dp"
-                    android:text="@string/captcha_banner_action"
-                    android:textSize="13sp"
-                    app:cornerRadius="8dp" />
-            </LinearLayout>
-
             <!-- 问卷链接 -->
             <LinearLayout
                 android:layout_width="match_parent"
@@ -468,7 +419,7 @@
                         app:cornerRadius="8dp" />
 
                     <com.google.android.material.button.MaterialButton
-                        android:id="@+id/importTemplateButton"
+                        android:id="@+id/deleteTemplateButton"
                         style="@style/Widget.MaterialComponents.Button.OutlinedButton"
                         android:layout_width="0dp"
                         android:layout_height="wrap_content"
@@ -477,21 +428,7 @@
                         android:insetTop="0dp"
                         android:insetBottom="0dp"
                         android:minWidth="0dp"
-                        android:text="@string/action_import_template"
-                        android:textSize="12sp"
-                        app:cornerRadius="8dp" />
-
-                    <com.google.android.material.button.MaterialButton
-                        android:id="@+id/exportTemplateButton"
-                        style="@style/Widget.MaterialComponents.Button.OutlinedButton"
-                        android:layout_width="0dp"
-                        android:layout_height="wrap_content"
-                        android:layout_marginStart="6dp"
-                        android:layout_weight="1"
-                        android:insetTop="0dp"
-                        android:insetBottom="0dp"
-                        android:minWidth="0dp"
-                        android:text="@string/action_export_template"
+                        android:text="@string/action_delete_template"
                         android:textSize="12sp"
                         app:cornerRadius="8dp" />
                 </LinearLayout>
