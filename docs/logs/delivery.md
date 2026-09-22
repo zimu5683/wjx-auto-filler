@@ -162,3 +162,24 @@ qa-build 产出 dist/wjx-autofill-1.0.0-universal.apk（6,138,222 B）+ .sha256 
 
 **交付序列**：v1.0.0（更新链路起点）→ v1.0.1 → v1.0.2 → v1.0.3（历史，CI 红已知且已归档）→ v1.0.4 → **v1.0.5（当前最终）**；
 六版共用同一把 release 签名（`edcce56e…`），应用内更新与覆盖安装链路完整。
+
+## 2026-09-22 16:30–17:10　第六阶段：v1.0.6（用户真机实测两处修复）
+
+| 时间 | 动作 | 证据 | 结果 |
+| --- | --- | --- | --- |
+| 16:30 | 接 task-29（T30 发布 v1.0.6） | 板上 task-27 in_progress、task-28/29 pending | 先做文档阶段，不空等 |
+| 16:38 | 等 UI 定稿 | strings.xml 出现 `label_mapping_count`「字段映射（%1$d 条）」、`parse_no_open_time`「未解析到开放时间，请手动填写」 | 逐字对齐，不臆造 |
+| 16:40 | 核对实现（防止文档写空话） | `MainActivity:398` 用 `label_mapping_count` 渲染标题；`:587-596` `ScheduleTime.applyParsedOpenTime(current, parsed) = parsed>0 ? format(parsed) : current`；`layout:318-327` 注释记录「ScrollView 内 RecyclerView（wrap_content + 未 setHasFixedSize）超过约 4 行不再可靠重新测量」→ 改为动态填充 LinearLayout | 文档与实现一致 |
+| 16:42 | 文档两条 | commit `8d1a49a`：README/USAGE 补「映射**无条数上限** + 标题显示条数」「解析后**自动填入开放时间**（解析不到保留原值并提示）」 | 完成 |
+| 16:52 | v1.0.6 出包 + 五项独立复验 | sha256 `6b5672a1…`；**七版签名同源**；4 ABI×2 .so；badging 1.0.6/10006；**482 单测 0 失败**；lintRelease **0 Error**（16:52:45） | 全部通过 |
+| 16:53 | 板子阻塞 → 上报 | task-28 仍 pending → task-29 `claim` 被拒 | Lead 代结 task-28（沿用既定处置） |
+| 16:55 | claim → 发布 v1.0.6 | commit `5a3c09a`（`git add -A` 带全部未提交项）；push main + tag `v1.0.6`；`gh release create … --verify-tag` | https://github.com/zimu5683/wjx-auto-filler/releases/tag/v1.0.6 |
+| 16:57 | 四项校验 | 匿名 `releases/latest` + apksigner 七版对比 | latest=v1.0.6；两条 URL 非空；APK digest = `sha256:6b5672a1…` **与本地冻结一致**；七版证书 SHA-256 全为 `edcce56e…` |
+| 17:05 | CI | `gh run view 35707424915` | **completed / success** |
+
+**如实标注（写进发布说明）**：本版「映射行的显示/滚动行为」**没有 JVM 单测覆盖**（UI 行为），
+需真机验证「连续加 8 条是否全部可见可编辑、整页可滚、无内嵌滚动条」；
+另 `SurveyStatus.fromModel()` 修复了 T16 遗留的 `openAt` 传 null（顶部状态条此前从未真正显示开放状态）。
+
+**最终交付序列**：v1.0.0 → v1.0.1 → v1.0.2 → v1.0.3（历史）→ v1.0.4 → v1.0.5 → **v1.0.6（当前最终）**，
+七版共用同一把 release 签名（`edcce56e…`），应用内更新与覆盖安装链路完整。
