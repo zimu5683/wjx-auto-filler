@@ -64,20 +64,18 @@ class WjxEngineIntegrationTest {
             )
             if (result.ok) {
                 assertNull("成功时 errorCode 必须为 null", result.errorCode)
+                assertTrue("成功必须是真响应（非本地错误）", result.httpStatus in 200..299)
             } else {
+                // 本地门控已取消（Lead 2026-09-22 裁定）：useAliVerify=true 且无令牌也**必须真发一次 POST**，
+                // 只有服务端响应业务码 7/22 才判 E_CAPTCHA。所以这里必须是「真的发出去了」的形态：
+                // httpStatus 为实际响应码、raw 为服务端正文（本地错误才允许 raw=null）。
+                assertNotNull("必须真的发出 POST 并保留服务端原文", result.raw)
+                assertTrue("httpStatus 应是实际响应码，实际 " + result.httpStatus, result.httpStatus in 200..299)
                 assertEquals(
-                    "T3 实测：本样本问卷被阿里云验证码拦截（业务码 7）",
+                    "本样本预期被验证码拦截（业务码 7/22）；实际 " + result.errorCode + " / " + result.message,
                     SubmitErrorCode.CAPTCHA,
                     result.errorCode,
                 )
-                // 两条路径都合法：
-                //  - useAliVerify=true 且无令牌 → 本地硬门控：httpStatus=0、raw=null，**不发任何请求**（本样本走这条）；
-                //  - 令牌非空 / 页面未声明门控 → 真发一次 POST，raw 保留服务端原文（7〒需要安全校验…）。
-                if (result.httpStatus == 0) {
-                    assertNull("本地硬门控不应有响应体", result.raw)
-                } else {
-                    assertNotNull("真实响应必须保留原文", result.raw)
-                }
             }
         }
     }

@@ -35,6 +35,17 @@ data class BatchReport(val outcomes: List<GroupOutcome>, val durationMs: Long) {
 }
 
 /**
+ * 人工验证兜底入口的**唯一判据**（契约 §13.5）：只看 `errorCode` 与「该组是否已用过机会」，
+ * **禁止文案匹配**。返回仍需兜底的分组下标（升序）；空列表 = 不显示兜底按钮。
+ *
+ * 纯函数，qa-build 可直接 JVM 单测。
+ */
+fun List<GroupOutcome>.pendingCaptchaGroups(retriedGroups: Set<Int>): List<Int> =
+    filter { it.result.errorCode == SubmitErrorCode.CAPTCHA && it.index !in retriedGroups }
+        .map { it.index }
+        .sorted()
+
+/**
  * 并发提交编排（契约 §9 的 11 条语义）：
  *  1. concurrency clamp 到 1..5，Semaphore 控制上限，每组一个协程；
  *  2. **每组独立会话**：每组新建 client（新 CookieJar）并重新 fetch，绝不复用其他组的 SurveyModel；

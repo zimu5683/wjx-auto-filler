@@ -46,7 +46,7 @@ class WjxSubmitRequestTest {
         val url = WjxSubmitRequest.buildSubmitUrl(model())!!
         assertTrue(url.startsWith("https://www.wjx.cn/joinnew/processjq.ashx?shortid=Q0DQewW"))
         assertTrue("缺 starttime：" + url, url.contains("&starttime="))
-        assertTrue("缺 ktimes：" + url, url.contains("&ktimes=3"))
+        assertTrue("缺 ktimes：" + url, url.contains("&ktimes=4"))
         assertTrue("缺 t：" + url, url.contains("&t="))
         assertTrue("缺 jqnonce：" + url, url.contains("&jqnonce="))
         assertTrue("缺 jqsign：" + url, url.contains("&jqsign="))
@@ -57,7 +57,7 @@ class WjxSubmitRequestTest {
     fun submitUrlEncodesJqSignWithTheCodecResult() {
         val url = WjxSubmitRequest.buildSubmitUrl(model())!!
         val encoded = url.substringAfter("&jqsign=").substringBefore("&")
-        assertEquals(WjxSubmitCodec.jqSign(nonce, 3), URLDecoder.decode(encoded, "UTF-8"))
+        assertEquals(WjxSubmitCodec.jqSign(nonce, 4), URLDecoder.decode(encoded, "UTF-8"))
     }
 
     @Test
@@ -142,4 +142,46 @@ class WjxSubmitRequestTest {
         val body = WjxSubmitRequest.buildSubmitBody(model(), emptyList(), null)
         assertEquals("submitdata=", body)
     }
+
+    @Test
+    fun urlKtimesFloorsAtFour() {
+        // 契约 §5.3（Lead 批准；V6 实测 4 有效）：&ktimes=max(4, pageKtimes)，且**不设上限**
+        for (page in listOf(0, 1, 2, 3)) {
+            val url = WjxSubmitRequest.buildSubmitUrl(model(ktimes = page))!!
+            assertTrue("pageKtimes=" + page + " 应发 4：" + url, url.contains("&ktimes=4"))
+            assertFalse("不得发送原始值 " + page + "：" + url, url.contains("&ktimes=" + page + "&"))
+        }
+        assertTrue(WjxSubmitRequest.buildSubmitUrl(model(ktimes = 6))!!.contains("&ktimes=6"))
+        assertTrue(WjxSubmitRequest.buildSubmitUrl(model(ktimes = 7))!!.contains("&ktimes=7"))
+    }
+
+    @Test
+    fun jqSignUsesEffectiveKtimesNotPageValue() {
+        // 页面 ktimes=0 时实际发 4 → 签名必须用 4（XOR key 由 1 变 4，签名与旧实现不同）
+        val url = WjxSubmitRequest.buildSubmitUrl(model(ktimes = 0))!!
+        val encoded = url.substringAfter("&jqsign=").substringBefore("&")
+        assertEquals(WjxSubmitCodec.jqSign(nonce, 4), URLDecoder.decode(encoded, "UTF-8"))
+        assertTrue(
+            "页面 ktimes=0 时应使用 key=4 而不是 key=1",
+            WjxSubmitCodec.jqSign(nonce, 4) != WjxSubmitCodec.jqSign(nonce, 0),
+        )
+    }
+
+    @Test
+    fun jqSignMatchesTheKtimesActuallySentInUrl() {
+        // 强断言（architect 要求）：URL 里的 ktimes 与 jqsign 必须同源，且发送值 >= 1。
+        // 注意不断言「ktimes 变了签名就变」——0 与 1 的 XOR key 相同，签名本来就一样。
+        for (pageKtimes in listOf(0, 1, 3, 7)) {
+            val url = WjxSubmitRequest.buildSubmitUrl(model(ktimes = pageKtimes))!!
+            val sent = url.substringAfter("&ktimes=").substringBefore("&").toInt()
+            assertTrue("pageKtimes=" + pageKtimes + " 时发送值必须 >=1，实际 " + sent, sent >= 1)
+            val encoded = url.substringAfter("&jqsign=").substringBefore("&")
+            assertEquals(
+                "pageKtimes=" + pageKtimes + " 的 jqsign 与 URL 上的 ktimes 不同源",
+                WjxSubmitCodec.jqSign(nonce, sent),
+                URLDecoder.decode(encoded, "UTF-8"),
+            )
+        }
+    }
+
 }

@@ -135,7 +135,7 @@
 
 1. **机器码与人类文案分离**：`SubmitResult` 有 additive 字段 `errorCode: String? = null`（Lead 2026-09-22 裁决）——`errorCode == null` ⟺ 成功；`message` 只放人类文案。UI 只读 `errorCode`，**禁止文案匹配**（文案会改，码不会）。
 2. **本地错误不发请求**：`E_URL / E_EMPTY / E_UNMATCHED / E_LIMIT / E_UNSUPPORTED` 一律 `httpStatus=0`、`raw=null`，避免无意义网络流量与风控计数。
-3. **HTTP 200 ≠ 成功**：问卷星用 200 返回业务错误；成功判定集中在 `WjxResponseClassifier`（契约 §8.4）。
+3. **HTTP 200 ≠ 成功**：问卷星用 200 返回业务错误；成功判定集中在 `WjxResponseClassifier`（契约 §8.4）。业务码有**两种形态**：`<码>〒<文案>`（如 `7〒需要安全校验，请重新提交！`）与**裸码**（T11 实测 `ktimes=0` 时回裸 `22`，无 `〒` 无文案）——解析器必须两种都支持，且**先解析业务码再退回关键词启发式**。
 4. **失败必须可定位**：未匹配字段要带字段名与候选题号；服务端拒绝要带服务端原文。
 5. **不自动重试**：提交非幂等，重试由用户显式触发。
 
@@ -263,7 +263,7 @@
 |---|---|---|
 | 单元测试（JVM） | codec 测试向量（契约 §3.4）、HTML fixture 题型判定（§6.2）、字段匹配与值解析（§7）、错误分类器（§8.4）、版本比较、模板导入导出（含 schemaVersion=2 拒绝、坏 JSON 备份）、`SubmitCoordinator` 并发上限与结果顺序 | 无网络、无 Android 运行时 |
 | 契约测试 | 用 fake `WjxSurveyClient`/`WjxSubmitter` 驱动 ui 层，断言错误码与 UI 分支 | 无网络 |
-| 手工联调 | 对样本问卷真实 `fetch`（只读）验证解析；提交实测由 T3 执行**仅 1 次**（结论：被安全校验以业务码 7 拦截，HTTP 200）。**端到端成功验证必须走 §12 兜底流程**（用户在自己的设备上点一次验证码） | 真实网络 + 用户配合 |
+| 手工联调 | 对样本问卷真实 `fetch`（只读）验证解析；提交实测：T3（`useAliVerify=1` 样本）被业务码 7 拦截；**V6 干净 A/B 在 `useAliVerify=0` 样本上取得纯 HTTP 成功**（`10〒/complete.aspx?joinid=127844297308`）。对 `useAliVerify=1` 问卷的端到端验证仍需走 §12 兜底 | 真实网络（仅 `useAliVerify=1` 时需用户配合） |
 | 打包校验 | `aapt dump badging`：package/minSdk=24/targetSdk=35、`native-code` 列出 4 ABI、无 GMS 依赖；APK 内 `.so` 仅来自 CameraX | 构建产物 |
 
 > 注意：JVM 单测里 `org.json` 是空壳（`unitTests.isReturnDefaultValues = true` 会让它返回 null）。Lead 已给 `android/app/build.gradle.kts` 加 `testImplementation("org.json:json:20231013")`。补充事实：`config/` 用自写 MiniJson（纯 Kotlin，刻意不用 org.json），但 `update/AppUpdater.kt` 用 org.json，故该测试依赖仍然必要。
@@ -274,7 +274,7 @@
 
 | # | 风险 | 影响 | 概率 | 缓解 / 兜底 | 责任 |
 |---|---|---|---|---|---|
-| **R1** | **阿里云验证码（`useAliVerify=1`）强制拦截纯接口提交** —— T3/T3.5 实测确认（门控信号是 `useAliVerify`，不是 `captchaType`） | 启用安全校验的问卷纯接口不可提交 | **已发生** | 引擎如实返回 `E_CAPTCHA`（不绕过）；**已缓解**：用户批准「仅验证码环节」App 内 WebView 兜底（§12 / 契约 §13），数据提交仍走纯 HTTP | api-debug（证据）/ Lead（决策）/ architect（契约） |
+| **R1** | **服务端在响应中要求安全校验（业务码 7/22）** —— `useAliVerify=1` 的样本（T3）必被拦；T14/V6 证明 `useAliVerify=0` 在 `ktimes≥4` + 最小请求形态下**可纯接口成功**（joinid=127844297308）；用户本人也确认该问卷微信扫码填写未弹验证 | 被拦时纯接口拿不到成功响应（仅影响这类问卷） | 中 | ① **不做本地门控，总是先试一次**（避免假阴性：`useAliVerify=1` 也可能本可提交；多一次被拒请求不产生答卷）；② 收到 7/22 → §12 兜底（每组 1 次）；③ `ktimes` 下限 4（已验证值）+ 不补发校验类字段 | api-debug（证据）/ Lead（决策）/ architect（契约） |
 | R2 | 问卷星页面改版导致解析失败 | 全部问卷不可用 | 中 | 解析与分类逻辑集中在 2 处；失败返回 `E_PARSE` 并保留 raw；URL/表单/隐藏域解析带多重回退（契约 §6.4） | T4 |
 | R3 | 服务端风控（同 IP 高频提交） | 提交被拒/账号受限 | 中 | 默认并发 2（上限 5）、每组独立会话、**不自动重试**、用户显式触发；可选进一步缓解：组间 300–800ms 随机延迟（需 Lead 批准） | T5 |
 | R4 | 本机 2GB 内存下 Gradle OOM | 构建失败、拖慢全队 | 高 | 单构建串行、后台任务、堆已限制；`--no-daemon` 备选；失败重试前先确认无并发构建 | 全队 |
@@ -285,6 +285,7 @@
 | R9 | GitHub API 限流（未认证 60/h） | 检查更新失败 | 低 | 24h 节流 + 手动触发；失败静默（更新不是主流程） | T5 |
 | R10 | 用户答案含个人信息，合规风险 | 隐私投诉 | 低 | 仅本地存储、不上传、不埋点；`allowBackup=false`；不保存 cookie | T5 |
 | R11 | 相机权限被拒/无相机设备 | 扫码不可用 | 中 | `required=false`；降级到相册与手输链接；不崩溃 | T5 |
+| **R12** | **请求形态触发风控（不是问卷属性）**：早期观测「`useAliVerify=0` 仍返回裸 22」曾被解读为「服务端主动要求二次校验」；**V6 单变量 A/B 证明裸 22 由 `ktimes=0` 触发**（0→4 后同一问卷返回 `10〒` 成功）。另实测**补发 `rn`/`captchaVerifyParam`/`sceneId` 会把成功（10）变成 `7〒需要安全校验`** | 请求形态不对，本可成功的问卷也会失败；还会误导我们判定「该问卷需要验证码」 | **已发生（已修正）** | ① `&ktimes = max(4, pageKtimes)`（契约 §5.3；下限取 V6 **已验证值 4**）；② V1 **不补发** `rn`/`lct`/`jpm`/`cst`/`source`/`captchaVerifyParam`/`sceneId`；③ 交付文档不得声称「页面开关决定能否提交」 | api-debug（证据）/ architect（契约）/ T5 |
 
 **R1 已实测确认且已缓解**：T3 实测样本问卷被业务码 7 拦截（HTTP 200 + `7〒需要安全校验，请重新提交！`），T3.5 进一步确认门控信号是 `useAliVerify`（6/6 问卷 `captchaType='2'`，用它门控会判死全部问卷）。用户已批准仅验证码环节用 App 内 WebView 兜底（§12），这也是**唯一的端到端验证手段**（§12.8）。
 
@@ -295,6 +296,7 @@
 ### 12.1 为什么需要
 
 - T3.5 实测：6 个问卷的 `captchaType` 全为 `'2'`，只有 `useAliVerify=1` 会被强制安全校验；用户自己的问卷正是 `useAliVerify=1`。
+- **T14 / V6 修正（api-debug 单变量 A/B）**：`useAliVerify=0` 的问卷**可以纯接口提交**——早期「`useAliVerify=0` 仍返回裸 22」由 **`ktimes=0`** 引起（0→4 后同一问卷返回 `10〒/complete.aspx?joinid=127844297308` 成功）。`useAliVerify=1` 的问卷仍需兜底。**兜底既不是万能钥匙，也不是唯一出路。** **Lead 2026-09-22 改判：本地 `useAliVerify` 门控已取消** —— 无论 `useAliVerify` 为何值都**先发一次提交**，只有响应 7/22 才走兜底（假阴性防护）；`useAliVerify` 仅作展示。
 - 纯 HTTP 提交被服务端以业务码 7 拦截（HTTP 200 + `7〒需要安全校验，请重新提交！`），**没有纯 HTTP 的绕法**（也不该有）。
 - 用户已批准：**仅验证码环节**用 App 内 WebView 由用户人工完成；**数据提交仍走纯 HTTP 接口**。这是「纯接口填表」定位下唯一可行且不越界的补救路径。
 
@@ -304,6 +306,7 @@
 2. **不绕过风控**：不伪造令牌、不打码、不做请求指纹伪装；只是把「人机验证」这一步交还给人。
 3. **显式触发**：必须用户点「人工验证后重试」；不自动弹 WebView、不自动重试。
 4. **失败可读**：所有兜底失败仍是 `E_CAPTCHA` 终态 + 明确的人类文案（不新增错误码，保持错误表稳定）。
+5. **不做本地门控（避免假阴性）**：`useAliVerify` 只是页面初始值，本地判 `E_CAPTCHA` 会把本来能提交的问卷判死（一次请求都不发）；正确做法是**总是先尝试提交**，由服务端响应决定是否走兜底。代价仅是多一次被拒请求（不产生答卷）。
 
 ### 12.3 组件与时序
 
@@ -347,11 +350,12 @@ UI 判定只看 `errorCode + 已兜底组集合`（每组最多 1 次；**取消
 
 https-only + 顶层导航白名单（仅 `*.wjx.cn`）、禁用文件访问/多窗口、`MIXED_CONTENT_NEVER_ALLOW`、允许第三方 cookie（阿里云验证码需要）、无 JS Bridge、Activity 不 exported、`onDestroy` 销毁 WebView 并清理会话 cookie。完整配置见契约 §13.8。
 
-### 12.8 端到端验证的唯一手段（交付文档必须写明）
+### 12.8 端到端验证状态（交付文档必须写明）
 
-- 用户问卷 `useAliVerify=1` → 纯 HTTP 必然被业务码 7 拦截 → **纯 HTTP 路径永远拿不到真实成功响应**。
-- 因此 **§12/契约 §13 的兜底流程是本项目唯一的端到端验证手段**：用户在自己的设备上点一次验证码 → 引擎带令牌提交 → 观察业务码 `10`。
-- 用户不执行这一步时，交付物只能提供「解析/匹配/编码/分类/兜底时序」的**单测级证据**，端到端成功无法证明。README/USAGE「已知限制」需保持「不绕过风控，只把人机验证交还给人」的叙事。
+- **纯接口端到端已实测成功（V6）**：`useAliVerify=0` 的样本 `https://v.wjx.cn/vm/P2M09FG.aspx`，在 `ktimes≥4`（契约下限）且不补发 `rn`/`captchaVerifyParam`/`sceneId` 的条件下返回 `10〒/wjx/join/complete.aspx?...joinid=127844297308` —— 这是本项目第一条**纯 HTTP 成功提交**证据（单变量 A/B，见契约 §0/§5.3/§11.3）。
+- **`useAliVerify=1` 的问卷（如 T3 样本）仍必须走 §12 兜底**：服务端强制安全校验，纯 HTTP 必然被业务码 7 拦截；对这类问卷，兜底是**唯一**的端到端手段（用户在自己设备上点一次验证码 → 引擎带令牌提交 → 观察业务码 `10`）。
+- 用户不执行兜底时，对 `useAliVerify=1` 的问卷只能提供「解析/匹配/编码/分类/兜底时序」的**单测级证据**。
+- README/USAGE 需保持「不绕过风控，只把人机验证交还给人」的叙事，并如实写明：**能否纯接口成功取决于请求形态（`ktimes>0`、不补发校验类字段），不取决于页面开关本身**。
 
 ### 12.9 新增风险
 
@@ -381,3 +385,6 @@ https-only + 顶层导航白名单（仅 `*.wjx.cn`）、禁用文件访问/多�
 | 2026-09-22 | Lead 改判：E_CAPTCHA 门控改为 `useAliVerify`（T3.5 证据）；新增 §12 验证码兜底（WebView）设计（用户已批准），R1 改为「已确认且已缓解」，原 §12 顺延为 §13 | Lead / 用户 / architect |
 | 2026-09-22 | Lead 批准 `SurveyModel.sceneId: String? = null`（additive）；提交时令牌非空且 sceneId 非空才写入 body，缺省不携带（T9 验收通过） | Lead / architect |
 | 2026-09-22 | Lead 最终裁定：每组 1 次兜底、不设跨组上限、按钮按「未兜底组集合」显示并逐组处理；**消耗判据：取消不消耗，超时/失败消耗，结构性失败不消耗但立即终态**；修正多组需验证时只有第一组有入口的功能缺陷；`captcha_exhausted` 改单次语义 | Lead / android-dev / architect |
+| 2026-09-22 | T14：URL 正则放宽为 wjx.cn 任意子域（`v.wjx.cn` 短链实测暴露缺陷）；业务码 22 补为服务端实测确认；新增 R12（`useAliVerify=0` ≠ 免验证，兜底为常规路径） | Lead / architect |
+| 2026-09-22 | T14/V6 修正：**撤回**「`useAliVerify=0` ≠ 免验证」结论（裸 22 实为 `ktimes=0` 风控）；`ktimes` 下限定为 `max(4,·)`（取已验证值 4）；补发 `rn`/`captchaVerifyParam`/`sceneId` 会把 10 变 7；R12 重写、§12.8 改为「纯接口已 E2E 成功」、§10 手工联调同步 | Lead / api-debug / architect |
+| 2026-09-22 | Lead 改判：**取消 `useAliVerify` 本地门控**（总是先试，避免假阴性）；`ktimes` 下限改为**已验证值 4**（`max(4,·)`，注意 0/1/2/3→4 会改变 jqsign）；§13.3 Cookie 基准改为**问卷 URL 的 origin**（`CookieHeader.originOf`，修复 `v.wjx.cn` 子域注入失效） | Lead / android-dev（证据）/ architect |

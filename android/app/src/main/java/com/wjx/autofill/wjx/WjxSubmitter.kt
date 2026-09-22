@@ -12,9 +12,11 @@ interface WjxSubmitter {
      * 用 [m] 里**本次 fetch 得到的** token（jqnonce/ktimes/cookies）提交 [answers]。
      *
      * [captchaToken] 是 additive 预留参数（Lead 2026-09-22 批准，带默认值）：
-     * - 为空（默认）：若 [SurveyModel.useAliVerify] 为 true，**不发任何网络请求**，直接返回 E_CAPTCHA；
-     * - 非空：跳过本地拦截，并把 `captchaVerifyParam`（以及 sceneId 非空时的 `sceneId`）放进 POST body；
-     *   调用方必须提供真实令牌，绝不伪造。sceneId 为空时不携带该字段，也不做本地拦截。
+     * - 为空（默认）：**照常提交**（不做本地 useAliVerify 门控）；body 只有 `submitdata`，
+     *   绝不携带 `captchaVerifyParam`/`sceneId`（T11 实测：补发这些字段反而把成功码 10 变成 `7〒需要安全校验`）。
+     *   服务端回 7/22 时由 [WjxResponseClassifier] 判 E_CAPTCHA。
+     * - 非空：把 `captchaVerifyParam`（以及 sceneId 非空时的 `sceneId`）放进 POST body；
+     *   调用方必须提供真实令牌，绝不伪造。sceneId 为空时不携带该字段，也不本地拦截。
      *
      * 除 [CancellationException] 外不抛异常：所有失败都转成 [SubmitResult]。
      * **绝不自动重试**（提交不幂等，重试可能产生重复答卷）。
@@ -35,10 +37,9 @@ class HttpWjxSubmitter(
                 if (effective.isEmpty()) {
                     return@withContext SubmitResult(false, 0, "没有可提交的答案", null, SubmitErrorCode.EMPTY)
                 }
-                // 拦截门：useAliVerify=1 的问卷服务端必返业务码 7（T3 实测），不要浪费一次网络提交。
-                if (m.useAliVerify && captchaToken.isNullOrBlank()) {
-                    return@withContext SubmitResult(false, 0, WjxText.CAPTCHA, null, SubmitErrorCode.CAPTCHA)
-                }
+                // **不做本地 useAliVerify 门控**（Lead 2026-09-22 裁定）：本地判定会产生假阴性——
+                // useAliVerify=1 的问卷也可能被服务端接受（T11：V6 形态在 useAliVerify=0 的问卷上拿到成功码 10）。
+                // 总是先真实提交；只有服务端回业务码 7/22 才由分类器判 E_CAPTCHA。
                 val token = captchaToken?.trim().orEmpty()
                 when (val matched = WjxAnswerMatcher.match(m, effective)) {
                     is MatchOutcome.Fail ->
@@ -93,16 +94,22 @@ object WjxSubmitRequest {
      * T3 实测：真实页面把 starttime 放在 **URL query**（不是 body），顺序为
      * starttime→cst→source→ktimes→capt→t→jqnonce→jqsign；V1 不发送语义未确认的 cst/source。
      * submitUrl 非 https / 非 wjx.cn → 返回 null（调用方转 E_URL）。
+     *
+     * **ktimes 下限为 4**（Lead 2026-09-22 裁定，契约 §5.3）：页面初值 0 是真实用户不可能产生的值
+     * （浏览器的 field/#ctlNext mouseover 与 loadAnswer 都会 ++）。T11 实测（用户样本 P2M09FG）：
+     * `ktimes=0` → 服务端回裸码 `22`（风控判定）；**只把 ktimes 改成 4 → 返回 `10〒/wjx/join/complete.aspx…` 提交成功**。
+     * 取 4 而不是 1：**4 是实测有效值，1 未验证**（Lead 裁定以证据为准）。
      */
     fun buildSubmitUrl(m: SurveyModel): String? {
         val base = m.submitUrl.trim()
         if (!WjxUrls.isHttpsWjx(base)) return null
+        val ktimes = maxOf(4, m.ktimes)
         val sb = StringBuilder(base)
         if (m.startTime.isNotBlank()) sb.append("&starttime=").append(urlEncodeQuery(m.startTime))
-        sb.append("&ktimes=").append(m.ktimes)
+        sb.append("&ktimes=").append(ktimes)
         sb.append("&t=").append(System.currentTimeMillis())
         sb.append("&jqnonce=").append(urlEncodeQuery(m.jqnonce))
-        sb.append("&jqsign=").append(urlEncodeQuery(WjxSubmitCodec.jqSign(m.jqnonce, m.ktimes)))
+        sb.append("&jqsign=").append(urlEncodeQuery(WjxSubmitCodec.jqSign(m.jqnonce, ktimes)))
         if (m.captchaType != null) sb.append("&capt=").append(m.captchaType)
         return sb.toString()
     }

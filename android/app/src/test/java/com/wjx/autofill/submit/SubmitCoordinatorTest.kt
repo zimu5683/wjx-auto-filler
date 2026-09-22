@@ -261,4 +261,30 @@ class SubmitCoordinatorTest {
         assertEquals(1, report.failureCount)
         assertEquals("成功 1 / 失败 1 / 共 2", report.summary())
     }
+
+    @Test
+    fun aliVerifyModelIsHandedToSubmitterWithoutLocalShortCircuit() = runTest {
+        // Lead 裁定：取消 useAliVerify 本地门控。编排层必须把 useAliVerify=true 的模型真的交给 submitter；
+        // 若还有短路，submitter 一次都不会被调用，结果直接是 E_CAPTCHA + httpStatus=0。
+        val submitter = FakeSubmitter(
+            SubmitResult(
+                false,
+                200,
+                "该问卷开启了安全校验（阿里云验证码），纯接口无法提交",
+                "7〒需要安全校验，请重新提交！",
+                SubmitErrorCode.CAPTCHA,
+            ),
+        )
+        val coordinator = SubmitCoordinator(
+            clientFactory = { FakeClient(Result.success(surveyModel().copy(useAliVerify = true))) },
+            submitter = submitter,
+            dispatcher = Dispatchers.IO,
+        )
+        val report = coordinator.run(template(listOf(group("g1", 0L))), concurrency = 1)
+
+        assertEquals("submitter 必须被调用一次（不得本地短路）", 1, submitter.callCount.get())
+        assertEquals(SubmitErrorCode.CAPTCHA, report.outcomes.single().result.errorCode)
+        assertEquals(200, report.outcomes.single().result.httpStatus)
+    }
+
 }

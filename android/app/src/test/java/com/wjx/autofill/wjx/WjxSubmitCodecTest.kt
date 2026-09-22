@@ -2,6 +2,7 @@ package com.wjx.autofill.wjx
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertThrows
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
@@ -112,4 +113,19 @@ class WjxSubmitCodecTest {
     fun encodeSubmitDataLetsLaterDuplicateTopicWin() {
         assertEquals("1\$B", WjxSubmitCodec.encodeSubmitData(listOf(1 to "A", 1 to "B")))
     }
+
+    @Test
+    fun jqSignKeyIsOneForBothKtimesZeroAndOne() {
+        // **codec 层事实**：key(0) == key(1) == 1，所以这两个入参签名相同。
+        // 注意提交器发的是 effectiveKtimes = max(4, pageKtimes)，页面 ktimes=0 时签名用 key=4（与 key=1 不同）。
+        assertEquals(WjxSubmitCodec.jqSign(nonce, 0), WjxSubmitCodec.jqSign(nonce, 1))
+        assertEquals(WjxSubmitCodec.jqSign("abc", 0), WjxSubmitCodec.jqSign("abc", 1))
+    }
+
+    @Test
+    fun jqSignOutputChangesWhenKeyChanges() {
+        // 只断言「key 不同 -> 输出不同」，不绑定具体字符（避免过度约束）
+        assertTrue(WjxSubmitCodec.jqSign("abc", 1) != WjxSubmitCodec.jqSign("abc", 2))
+    }
+
 }

@@ -198,6 +198,44 @@ public class SmokeTest {
         });
         check("scene.branch.disabled", sc5.getFirst() == null && !loader2[0], "useAliVerify=0 不应抓 JS");
 
+        // ---------- ktimes 下限 4（T11 实测：ktimes=0 → 裸码 22；ktimes=4 → 成功码 10；1 未验证） ----------
+        SurveyModel zeroK = new SurveyModel("https://www.wjx.cn/vm/Q0DQewW.aspx", "Q0DQewW", "测试", qs,
+            "https://www.wjx.cn/joinnew/processjq.ashx?shortid=Q0DQewW", "nonce-abc", 0, "2026/9/22 1:00:00", 2,
+            new HashMap<String, String>(), false, null, null);
+        String urlZero = WjxSubmitRequest.INSTANCE.buildSubmitUrl(zeroK);
+        check("url.ktimes.min4", urlZero != null && urlZero.contains("&ktimes=4") && !urlZero.contains("&ktimes=0"), String.valueOf(urlZero));
+        check("url.ktimes.min4.sign", urlZero != null && urlZero.contains("jqsign=" + java.net.URLEncoder.encode(WjxSubmitCodec.INSTANCE.jqSign("nonce-abc", 4), "UTF-8").replace("+", "%20")), String.valueOf(urlZero));
+        SurveyModel threeK = new SurveyModel("https://www.wjx.cn/vm/Q0DQewW.aspx", "Q0DQewW", "测试", qs,
+            "https://www.wjx.cn/joinnew/processjq.ashx?shortid=Q0DQewW", "nonce-abc", 3, "2026/9/22 1:00:00", 2,
+            new HashMap<String, String>(), false, null, null);
+        String urlThree = WjxSubmitRequest.INSTANCE.buildSubmitUrl(threeK);
+        check("url.ktimes.floor4", urlThree != null && urlThree.contains("&ktimes=4") && !urlThree.contains("&ktimes=3"), String.valueOf(urlThree));
+        SurveyModel sevenK = new SurveyModel("https://www.wjx.cn/vm/Q0DQewW.aspx", "Q0DQewW", "测试", qs,
+            "https://www.wjx.cn/joinnew/processjq.ashx?shortid=Q0DQewW", "nonce-abc", 7, "2026/9/22 1:00:00", 2,
+            new HashMap<String, String>(), false, null, null);
+        String urlSeven = WjxSubmitRequest.INSTANCE.buildSubmitUrl(sevenK);
+        check("url.ktimes.passthrough", urlSeven != null && urlSeven.contains("&ktimes=7"), String.valueOf(urlSeven));
+
+        // ---------- URL 正则：允许 wjx.cn 任意子域（契约 T14） ----------
+        SurveyModel subV = WjxPageParser.INSTANCE.parse("https://v.wjx.cn/vm/AAAABBBB.aspx", synth, new HashMap<>());
+        eq("url.subdomain.v", subV.getShortId(), "AAAABBBB");
+        SurveyModel subBare = WjxPageParser.INSTANCE.parse("https://wjx.cn/vm/AAAABBBB.aspx", synth, new HashMap<>());
+        eq("url.bare.domain", subBare.getShortId(), "AAAABBBB");
+        SurveyModel subDash = WjxPageParser.INSTANCE.parse("https://my-survey.wjx.cn/vm/AAAABBBB.aspx?q1=x#f", synth, new HashMap<>());
+        eq("url.subdomain.dash.query", subDash.getShortId(), "AAAABBBB");
+        try {
+            WjxPageParser.INSTANCE.parse("http://v.wjx.cn/vm/AAAABBBB.aspx", synth, new HashMap<>());
+            check("url.http.rejected", false, "http 未被拒绝");
+        } catch (Exception ex) {
+            check("url.http.rejected", ex instanceof WjxException && SubmitErrorCode.URL.equals(((WjxException) ex).getCode()), String.valueOf(ex));
+        }
+        try {
+            WjxPageParser.INSTANCE.parse("https://evil.example.com/vm/AAAABBBB.aspx", synth, new HashMap<>());
+            check("url.foreign.rejected", false, "外域未被拒绝");
+        } catch (Exception ex) {
+            check("url.foreign.rejected", ex instanceof WjxException && SubmitErrorCode.URL.equals(((WjxException) ex).getCode()), String.valueOf(ex));
+        }
+
         System.out.println("\n===== PASS=" + pass + " FAIL=" + fail + " =====");
         if (fail > 0) System.exit(1);
     }

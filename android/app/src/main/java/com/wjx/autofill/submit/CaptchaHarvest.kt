@@ -47,4 +47,28 @@ object CookieHeader {
     /** `{a=b}` → `"a=b"`（逐条写 CookieManager 用）。 */
     fun entries(cookies: Map<String, String>): List<String> =
         cookies.entries.map { "${it.key}=${it.value}" }
+
+    /**
+     * 取 URL 的 origin（`scheme://host[:port]/`），作为 cookie 注入/清理的基准。
+     *
+     * 契约 §13.3 的 origin 口径：必须与**问卷所在主机**一致 —— 若写死 `https://www.wjx.cn/`，
+     * `v.wjx.cn` 的验证页收不到引擎会话 cookie（cookie 绑在 www 主机上），方向①失效。
+     * 解析失败（空串 / 非法 URL）返回 [fallback]。
+     */
+    fun originOf(url: String, fallback: String = "https://www.wjx.cn/"): String {
+        return try {
+            val uri = java.net.URI(url.trim())
+            val host = uri.host.orEmpty()
+            if (host.isEmpty()) {
+                fallback
+            } else {
+                // 主机名大小写不敏感，统一小写，避免与 CookieManager 的主机归一化不一致。
+                val scheme = uri.scheme?.lowercase() ?: "https"
+                val port = if (uri.port > 0) ":" + uri.port else ""
+                "$scheme://${host.lowercase()}$port/"
+            }
+        } catch (_: Throwable) {
+            fallback
+        }
+    }
 }

@@ -165,3 +165,47 @@ Lead 升版后执行：`bash scripts/build-apk.sh --quick`（只 assembleRelease
 - 1.0.0 产物未被动：dist/wjx-autofill-1.0.0-universal.apk 仍是 fd1370a7…。
 - 构建前先清掉了 1.0.0 遗留的部分 test-results（避免 1.0.1 报告出现误导性用例计数），并 ./gradlew --stop 刷新 daemon 环境。
 - 注意：dist/VERIFY-REPORT.md 是**每次运行覆盖生成**的，现在描述的是 1.0.1；1.0.0 的报告内容（含集成测试证据）已被本轮覆盖。
+## 2026-09-22 04:20 更正与 T13 最终用例（重要：旧断言已作废）
+
+### ⚠️ 作废声明：本文件前面「集成测试」一节里的断言已被推翻
+
+前面写的「submit：ok=false、http=0、errorCode=E_CAPTCHA、raw=null → useAliVerify 硬门控生效，未发 POST」**已作废**：
+Lead 2026-09-22 裁定**取消 useAliVerify 本地门控**。现行口径：
+
+- `useAliVerify=true` 且 `captchaToken=null` 时**也必须真的发出一次 POST**（本地判定会产生假阴性：T11 实测最小请求形态在 useAliVerify=0 的问卷上拿到成功码 10）；
+- 只有服务端响应业务码 **7 / 22** 才返回 `E_CAPTCHA`（终态），此时 `httpStatus` 为实际响应码、`raw` 为服务端正文；
+- 本地错误（E_URL / E_UNMATCHED / E_EMPTY）才是 `httpStatus=0`、`raw=null`。
+
+已按此反转：`WjxEngineIntegrationTest` 的断言改为「必须真的发出 POST：httpStatus ∈ 200..299 且 raw 非空」；
+`HttpWjxSubmitterTest` 删掉两个「零网络 E_CAPTCHA」用例，改为用 E_UNMATCHED / E_URL 证明它走到了匹配与 URL 构造步骤；
+`SubmitCoordinatorTest` 新增 fake submitter 用例，断言 useAliVerify=true 的模型**确实被交给 submitter**（callCount=1）。
+
+### 另一处口径更正：ktimes 下限是 4（不是 1）
+
+- `WjxSubmitRequest.buildSubmitUrl`：`ktimes = maxOf(4, m.ktimes)`，`&ktimes=` 与 `jqSign(m.jqnonce, ktimes)` 用**同一个变量**。
+- 页面 ktimes=0/1/2/3 → URL 发 4；ktimes=6/7 → 保持 6/7（不设上限）。
+- **页面 ktimes=0 时签名会变**（XOR key 由 1 变 4）——不要沿用「0 与 1 签名相同」的说法（那只是 codec 层 key(0)==key(1) 的事实）。
+
+### T13 最终用例（本轮新增/修改，均已独立 kotlinc 验证）
+
+| 文件 | 新增/修改 |
+|---|---|
+| wjx/WjxUrlsTest.kt（新） | WjxUrls.shortIdOf / isAllowedHost / isHttpsWjx 的子域矩阵：v / www2 / survey 子域、大小写、/jq/ 与 /m/、4/32 边界；负例 evilwjx.cn、evil-wjx.cn、wjx.cn.evil.com、http、非 vm|jq|m、3/33 字符 |
+| config/TemplatesJsonSubdomainTest.kt（新） | templates.json surveyUrl 子域导入 + shortId 推导 + 全部负例 |
+| qr/SurveyLinkValidatorTest.kt | shortIdOf/checkSyntax 子域、http→https 升级、evil 变体负例 |
+| wjx/WjxSubmitRequestTest.kt | ktimes floor 4（0/1/2/3→4，6/7 保持）、jqsign 与实际发送 ktimes 同源、页面 0 时用 key=4 |
+| wjx/WjxResponseClassifierTest.kt | 裸码 22 → E_CAPTCHA(raw="22")、裸码 7、11〒完成页 URL → 成功、V6 真实成功向量（10〒/complete.aspx…comsign=…） |
+| wjx/WjxSubmitCodecTest.kt | codec 层 key(0)==key(1)；key 不同则输出不同 |
+| wjx/HttpWjxSubmitterTest.kt | 删除本地门控用例，改为「无本地短路」证明 |
+| submit/SubmitCoordinatorTest.kt | fake submitter 证明 useAliVerify=true 不被短路（callCount=1、httpStatus=200） |
+| submit/CookieHeaderTest.kt（新） | originOf 跟随问卷主机（v/www/www2）、大小写与端口归一、非法输入兜底、注入与清理同源 |
+
+### 自查中修掉的两个自身缺陷
+
+1. 我在新增分类器向量时把业务码分隔符误打成 `〓`(U+3013)，正确是 `〒`(U+3012) → 两个成功向量误判失败；已全仓库替换并复核 0 残留。
+2. 两条旧断言仍写 ktimes=3（floor 改为 4 后失效）→ 已改为 4。
+
+### 验证结果（独立 kotlinc + JUnit，不占 Gradle 槽）
+
+- **152 用例全部通过（OK (152 tests)）**，覆盖上述全部文件（QrDecodeTest 因需 android.jar 单独跑，见前面 5/5 通过记录）。
+- Gradle 侧最终构建由 Lead 直接执行；本 agent 不再启动 Gradle，避免构建互等锁。

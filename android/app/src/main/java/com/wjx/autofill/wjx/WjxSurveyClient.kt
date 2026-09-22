@@ -100,7 +100,7 @@ class HttpWjxSurveyClient(
 
 /** 契约文案集中处（UI 只读 errorCode，文案在这里逐字实现）。 */
 internal object WjxText {
-    const val URL_INVALID = "链接无效：请填写 https://www.wjx.cn/vm/xxxx.aspx 形式的问卷链接"
+    const val URL_INVALID = "链接无效：请填写 https://wjx.cn/vm/xxxx.aspx 形式的问卷链接（支持任意子域，如 v.wjx.cn）"
     const val PARSE = "问卷页面解析失败，可能是问卷已关闭或页面改版"
     const val PAGED = "该问卷为分页/逐题模式，暂不支持自动填写"
     const val NETWORK = "网络连接失败，请检查网络后重试"
@@ -150,7 +150,7 @@ object WjxSceneId {
 /** 问卷星 URL 规则（docs/API-CONTRACT.md §5.1）。 */
 internal object WjxUrls {
 
-    private val URL_RE = Regex("""^https://(www\.)?wjx\.cn/(vm|jq|m)/([A-Za-z0-9]{4,32})\.aspx""", RegexOption.IGNORE_CASE)
+    private val URL_RE = Regex("""^https://([A-Za-z0-9-]+\.)*wjx\.cn/(vm|jq|m)/([A-Za-z0-9]{4,32})\.aspx""", RegexOption.IGNORE_CASE)
 
     /** 从链接前缀捕获 shortId；不匹配返回 null（http、其它域名、其它 path 形态一律拒绝）。 */
     fun shortIdOf(url: String): String? = URL_RE.find(url.trim())?.groupValues?.get(3)

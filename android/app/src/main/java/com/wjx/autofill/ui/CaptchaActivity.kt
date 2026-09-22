@@ -51,7 +51,8 @@ internal const val JS_HARVEST =
  *  - 不注册任何 `@JavascriptInterface`；
  *  - 数据提交永远由引擎（HttpURLConnection）完成。
  *
- * 会话一致性（§13.3）：打开前把引擎 cookie 逐条写进 WebView 的 CookieManager；
+ * 会话一致性（§13.3）：打开前把引擎 cookie 逐条写进 WebView 的 CookieManager（基准 = 问卷 URL 的 origin，
+ * 否则 v.wjx.cn 问卷收不到绑在 www.wjx.cn 上的 cookie）；
  * 收割后把 WebView 全量 cookie 交回引擎；无论成功/失败/取消都清理本次会话 cookie
  * （逐条置空，**不得** removeAllCookies —— 全局单例会误伤其他会话）。
  */
@@ -71,7 +72,8 @@ class CaptchaActivity : AppCompatActivity() {
         /** 验证环节是否**真正发起过**（验证码已成功唤起）。UI 据此决定是否消耗该组机会。 */
         const val EXTRA_STARTED = "extra_captcha_started"
 
-        private const val BASE_URL = "https://www.wjx.cn/"
+        /** origin 解析失败时的兜底基准（正常路径用问卷 URL 自身的 origin）。 */
+        private const val DEFAULT_COOKIE_BASE = "https://www.wjx.cn/"
         private const val POLL_MS = 500L
 
         /** 契约 §13.2：等待验证的总时长 180 秒。 */
@@ -105,6 +107,11 @@ class CaptchaActivity : AppCompatActivity() {
     private var verificationStarted = false
     private var surveyUrl: String = ""
     private var injectedCookies: Map<String, String> = emptyMap()
+
+    /** cookie 注入/清理基准 = 问卷 URL 的 origin（契约 §13.3 origin 口径）。 */
+    private val cookieBase: String by lazy {
+        CookieHeader.originOf(surveyUrl, DEFAULT_COOKIE_BASE)
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -312,7 +319,7 @@ class CaptchaActivity : AppCompatActivity() {
             val manager = CookieManager.getInstance()
             manager.setAcceptCookie(true)
             // §13.3 方向①：必须逐条 setCookie，不要手工拼 Cookie 头塞进 loadUrl。
-            CookieHeader.entries(cookies).forEach { pair -> manager.setCookie(BASE_URL, pair) }
+            CookieHeader.entries(cookies).forEach { pair -> manager.setCookie(cookieBase, pair) }
             manager.flush()
         } catch (_: Throwable) {
             // 注入失败不致命：验证页自己也会建立会话。
@@ -325,8 +332,8 @@ class CaptchaActivity : AppCompatActivity() {
             val manager = CookieManager.getInstance()
             val names = LinkedHashSet<String>()
             names.addAll(injectedCookies.keys)
-            names.addAll(CookieHeader.parse(manager.getCookie(BASE_URL)).keys)
-            names.forEach { name -> manager.setCookie(BASE_URL, "$name=; Max-Age=0") }
+            names.addAll(CookieHeader.parse(manager.getCookie(cookieBase)).keys)
+            names.forEach { name -> manager.setCookie(cookieBase, "$name=; Max-Age=0") }
             manager.flush()
         } catch (_: Throwable) {
             // 清理失败不阻断退出流程。

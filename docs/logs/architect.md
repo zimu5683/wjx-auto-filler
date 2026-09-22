@@ -183,3 +183,85 @@ curl -sS -L "https://image.wjx.cn/joinnew/js/jqmobo2.js?v=7558" -o jqmobo2.js
 - 同步位置：契约 §13.4 判据、§13.8 JS Bridge 行、§13.10 T5/T6 清单；DESIGN §12.5
 - 行为契约未变，仅措辞与判据计数修正
 
+## 补充 9：T14 子域放宽 + useAliVerify 假设被推翻（task-13）
+
+### 落盘内容
+- §5.1 shortId 正则 → `^https://([A-Za-z0-9-]+\.)*wjx\.cn/(vm|jq|m)/([A-Za-z0-9]{4,32})\.aspx`（wjx.cn 任意子域）；§5.1 允许的 host 行同步
+- §4.2 templates.json JSON Schema 的 `surveyUrl.pattern` 同步放宽；§4.1 MappingTemplate 注释同步
+- §8.4：业务码 22 由「JS 推导」升级为**服务端实测确认**（Lead 实测 useAliVerify=0 仍返回 22），并附 JS 证据 `22==a → alertNew(submit_need_validate2) → isCaptchaValid=false; useAliVerify=1; loadCaptchShow()`；来源等级表同步
+- §11.3 新增第 5 条：`useAliVerify == false` **不代表免验证**（只是页面初始值，服务端可在任意提交上返回 7/22）→ 响应分类器必需、兜底入口常备
+- §0 新增 T14 补充事实段；§13 背景段同步改判
+- DESIGN：§12.1 增「T14 重要改判」条目、风险表新增 **R12**、变更记录同步
+
+### 代码侧待跟进（只改文档，未动代码；已定位到行号）
+旧正则仍存在于 3 个文件：
+- `qr/SurveyLinkValidator.kt:29`（注释 :42）
+- `config/TemplatesJson.kt:19-20`（注释 :18）
+- `wjx/WjxSurveyClient.kt:153`（注释 :155）
+→ 已通知 api-debug / android-dev / qa-build / delivery
+
+### 状态
+- task-13 已 complete；契约与设计均为 T14 版本
+- 关键结论：**能否纯接口成功只能实发才知道**；兜底路径按常规路径对待
+
+## 补充 10：T11 回填（api-debug 证据）
+
+- **10 与 11 都是成功**（JS 逐字钉死）：`@148535` `10==a` → 成功 UI + complete.aspx；`@156436` `11==a` → clearAnswer/addtolog + `location.replace(n[1])`；`@159634` `11==a return` → §8.4 与来源等级表把 11 从「JS 分支推导」升级为「**JS 逐字证据（T11 钉死）**」
+- **7 与 22 同义**（都要求安全校验）：`hintinfo.js` `submit_need_validate2="需要安全校验，请重新提交！"`，两个分支都 `isCaptchaValid=false; useAliVerify=1; loadCaptchShow()`
+- **新增分类器规则（重要）**：业务码支持**裸码形态**——T11 实测 `ktimes=0` 时服务端回**裸 22**（无 〒、无文案）→ §8.4 第 4 步改为「先判 `^\d{1,3}$` 裸码，再按 〒 分割」，并新增测试向量 `22`（裸码）→ E_CAPTCHA
+- §8.4 测试向量新增 `22`（真实裸码）与 `11〒…`（构造用例）；来源等级表补 T11 证据；标注证据出处 `tools/wjx-probe/evidence/11-t11-conclusion.md`
+- §11.1 D2 行改为「T11 已钉死」；**新增 D6（待 Lead 批准）**：`&ktimes=` 是否改为 `max(1, ktimes)`（真实浏览器 ktimes>0，发 0 触发裸 22 风控）；已注明 `ktimes=0→1` 时 XOR key 不变、签名不变，仅 URL 数值变化
+- DESIGN §4.1 第 3 条补充「业务码两种形态」说明
+- **未擅自改 §5.3**：ktimes 属行为契约变更，等 Lead 批准后与 api-debug 同步落地
+## 补充 11：T11 结论反转（V6 单变量 A/B）——撤回 R12 与 §11.3 第 5 条
+
+### 决定性证据（api-debug V6，与 S0 只差 ktimes 0→4）
+```text
+POST .../processjq.ashx?shortid=P2M09FG&starttime=…&ktimes=4&capt=2&t=…&jqnonce=…&jqsign=…
+body: submitdata=1$…}2$…}3$…
+→ HTTP 200  10〒/wjx/join/complete.aspx?activityid=P2M09FG&joinid=127844297308&sojumpindex=1&comsign=…
+```
+→ **纯接口提交成功**；此前「useAliVerify=0 仍返回裸 22」由 **ktimes=0** 引起，不是问卷属性
+
+### 已撤回/改写
+- §0：T14 段改为「事实与修正」，明确裸 22 = ktimes=0 风控指纹，不是「问卷需要验证码」
+- §11.3 第 5 条：由「useAliVerify=0 不代表免验证」改为「**useAliVerify=0 可纯接口提交**（ktimes>0 + 不补发校验字段）」；§11.1 D1 改为「V6 已分离两种情况」
+- DESIGN R12：由「假设被推翻」改为「**请求形态触发风控（不是问卷属性）**」；§12.1 改判条目、§12.8 由「唯一手段」改为「**纯接口已 E2E 成功 + useAliVerify=1 才需兜底**」、§10 手工联调同步
+- §13 背景段同步；契约与 DESIGN 变更记录各加一行
+
+### 新增（Lead 批准的 ktimes 修复）
+- §5.3 第 4 步：&ktimes = max(1, m.ktimes)，jqsign 用同一 effectiveKtimes；写入 Lead 要求的**变更影响说明**（0 与 1 的 XOR key 相同 → 签名不变，只改 URL 数值）
+- §6.4 ktimes 行同步；§11 D6 记为「已批准并由 V6 证实方向」
+- §5.3 第 5 步：把「不补发字段」的理由升级为实测（发送 rn/captchaVerifyParam/sceneId 会把 10 变 7；cst/source 已排除，rn/body 类为嫌疑未分离）
+- §8.4：新增 **V6 真实成功向量**（10〒/wjx/join/complete.aspx?activityid=P2M09FG&joinid=127844297308&…）；证据出处标注 11-t11-conclusion.md 的旧结论已作废
+
+### 我新发现的未闭合点（已上报 Lead）
+- Lead 批准的下限是 **1**，但 V6 的 A/B 用的是 **4** → **ktimes=1 是否等效未验证**。契约已如实写入「未验证点」，并**不声称**该改动能解锁问卷；建议 api-debug 补一次 ktimes=1 单变量测试，若 1 不足再由 Lead 决定是否提高下限
+- 另：rn/captchaVerifyParam/sceneId 中究竟哪个字段导致 10→7 尚未分离，V1 维持「一律不发」
+
+### 待外部跟进
+- api-debug：重写 11-t11-conclusion.md（旧结论作废）、补 ktimes=1 测试
+- qa-build：新增 V6 真实成功向量
+- delivery：USAGE.md:157/162 的「与 useAliVerify 无关 / 服务端要求二次校验」叙述需按 V6 改写
+## 补充 12：取消本地门控 + ktimes 下限 4 + Cookie origin 修复
+
+### Lead 改判 1：取消 useAliVerify 本地门控
+- 口径：无论 useAliVerify 为何值都**先发一次真实提交**；只有响应业务码 7/22（或 aliyunwaf）才走 §13 兜底。理由：本地门控产生**假阴性**（useAliVerify=1 也可能本可提交），代价仅是多一次被拒请求（不产生答卷）
+- 契约改动：§5.3 第 0 步（废除门控）、§8.2 E_CAPTCHA 触发条件、§6.4/§2.2 useAliVerify 语义（仅展示）、§11.2 规则 2、§11.3 结论 2（废除）、§12 DoD T4、§13.1 触发、§13.2 第 2 步、§13.10 T4
+- DESIGN：R1 重写（风险改为「服务端响应要求校验」）、§12.1 补改判、§12.2 新增第 5 条原则、§12.8 同步
+
+### Lead 改判 2：ktimes 下限取已验证值 4
+- `effectiveKtimes = max(4, m.ktimes)`（不设上限）；依据 V6 单变量 A/B（ktimes=4 成功、joinid=127844297308）；**撤销**「ktimes>0 即有效」的推断措辞
+- **我主动更正了一处自己写错的说明**：下限从 1 改为 4 后，0/1/2/3 → 4 会**改变 XOR key（1→4）→ jqsign 随之改变**（此前「签名不变」的说法只在下限为 1 时成立）。契约已写明「URL 数值与签名必须同源」
+- 代码核对：api-debug 已落地 `WjxSubmitter.kt:106 maxOf(4, m.ktimes)`，且 :112 的 jqsign 用同一变量 ✓；:40 注释已写明不做本地门控 ✓
+
+### android-dev 发现并已批准：§13.3 Cookie 基准
+- 原 §13.3 ① 写死 `setCookie("https://www.wjx.cn/", ...)`，对 `v.wjx.cn` 子域验证页失效（方向①收不到引擎 cookie）
+- 新口径：基准 = **问卷 URL 的 origin**（`CookieHeader.originOf(url, fallback)`，host 小写，失败兜底 www），方向①与④共用同一 cookieBase；§13.3 ①/④ 已改，§13.10 T5 加静态检查项
+- 我复核了 sceneId 解析：`WjxSceneId.resolve` 在 useAliVerify=0 时仍优先用页面内联 sceneId（只有抓 wjx_captch.js 才受开关限制）→ 无需改动
+
+### 外部跟进（已发消息）
+- delivery：文档仍写 `max(1, 页面值)` 且 USAGE 错误表仍写「useAliVerify=1 硬门控」→ 两处都要改（floor 4；触发只看响应码）
+- qa-build：加 floor 4 用例（ktimes≥4 且 jqsign 同源；ktimes=0 时签名**会变**）、无门控用例（总是发 POST）、cookie origin 用例（v.wjx.cn）
+- api-debug：确认已落地；提醒 jqsign 同源（已满足）
+

@@ -104,3 +104,57 @@
 1. 真机 WebView + 阿里云验证码控件行为（§13 兜底是唯一端到端手段，需用户在设备上完成一次）。
 2. 相机实时扫码的预览/对焦/手电筒（相册解码有单测夹具覆盖）。
 3. 应用内更新链路需 v1.0.1 Release 才能端到端验证。
+---
+
+## 04:0x task-11（T12/T13）wjx.cn 任意子域支持
+
+### 改动（两处，均在 task-11 的 write scope 内）
+1. `qr/SurveyLinkValidator.kt`：`SHORT_ID_URL_REGEX` → `^https://([A-Za-z0-9-]+\.)*wjx\.cn/(vm|jq|m)/([A-Za-z0-9]{4,32})\.aspx` + `RegexOption.IGNORE_CASE`；注释同步。
+2. `config/TemplatesJson.kt`：`SURVEY_URL_REGEX` 同上（templates.json 的 surveyUrl 校验 + shortId 推导）；注释同步。
+3. `res/values/strings.xml`：`hint_survey_link` / `result_hint_url` 去掉写死的 `www.`，并注明「支持任意 wjx.cn 子域」。
+- `isAllowedHost` 未改动（本就支持子域）；`URL_PATTERN`（二维码文本提取）未改动。
+
+### 顺带修掉两个潜伏缺陷（自查发现，非任务要求）
+1. **`SHORT_ID_URL_REGEX` 的原始字符串里是双反斜杠**（`\\.`）→ 正则实际要求「字面反斜杠 + 任意字符」，导致 **`shortIdOf()` 对任何真实链接都返回 null**。影响面：保存模板时 shortId 恒为空（被 TemplatesJson 的 url 推导兜住，所以没暴露）。已改为单反斜杠并逐字节核对。
+2. `SURVEY_URL_REGEX` 末尾 `.aspx` 的点未转义（`).aspx`）→ 实际匹配任意字符；已改为 `\.aspx`。
+- 并写了一个全量扫描脚本，确认全仓库 Kotlin **原始字符串**里不再有「连续两个反斜杠」的可疑写法（0 命中）。
+
+### 验证（离线 kotlinc，不占 Gradle 槽）
+- `$TMPDIR/kcheck/kc8.sh` + `Harness3.kt`：**63 条断言全过**，含：
+  - 正例：www / v（用户新样本 `https://v.wjx.cn/vm/P2M09FG.aspx`）/ 裸域名 / `a-b.wjx.cn` / `www2.wjx.cn` / jq / m / 全大写 / 带查询串；
+  - 负例：`evilwjx.cn`、`evil-wjx.cn`、`wjx.cn.evil.com`、`http://`、非 `(vm|jq|m)` 路径、shortId 3 位/33 位、`.html` 后缀；
+  - 边界：shortId 4 位与 32 位；
+  - `checkSyntax`：v.wjx.cn 无「仅支持 wjx.cn」告警、http 升级为 https、wjx.top 仍带告警；
+  - TemplatesJson：子域模板可导入、shortId 缺失按 url 推导 + warning、冲突以 url 为准、非法链接被拒、编解码往返、TemplateStore 落盘往返；
+  - 逐条复刻 qa-build `SurveyLinkValidatorTest` / `TemplatesJsonSubdomainTest` 的 T13 用例。
+- 全量 `kc7.sh`（含真实 wjx/ 引擎）：**ANDROID SOURCE COMPILE OK**。
+
+### 待 Lead 决策（超出 task-11 的两处范围）
+`ui/CaptchaActivity.kt` 的 cookie 注入基准写死为 `https://www.wjx.cn/`（契约 §13.3 原文）。对 `v.wjx.cn` 问卷：
+- 方向②（读回 `getCookie(surveyUrl)` 交给引擎）**仍然正确**；
+- 方向①（把引擎 cookie 注入 WebView）对 v.wjx.cn **无效**（cookie 绑在 www.wjx.cn 主机上）。
+建议改为按问卷 URL 的 origin 注入/清理（2 行）。已报 Lead 等批准，未擅自改。
+---
+
+## 04:3x CaptchaActivity origin 口径（Lead 批准）+ 兜底判据纯函数化
+
+### 1. cookie 注入基准改为问卷 URL 的 origin（Lead 批准）
+- `submit/CaptchaHarvest.kt`：新增**纯函数** `CookieHeader.originOf(url, fallback = "https://www.wjx.cn/")` → `scheme://host[:port]/`，host 统一小写；解析失败走兜底。
+- `ui/CaptchaActivity.kt`：`BASE_URL` → `DEFAULT_COOKIE_BASE`（仅兜底）+ `private val cookieBase by lazy { CookieHeader.originOf(surveyUrl, DEFAULT_COOKIE_BASE) }`；**方向①注入与方向④清理共用同一个 origin**。
+- 原因：写死 `https://www.wjx.cn/` 时，`v.wjx.cn` 问卷的验证页收不到绑在 www 主机上的引擎会话 cookie（方向①失效）。
+- 自验中发现并修掉：`originOf` 原先只小写 scheme 不小写 host，大写主机名会得到 `https://V.WJX.CN/`；已统一 lowercase。
+
+### 2. 兜底入口判据抽成纯函数（可单测）
+- `submit/SubmitCoordinator.kt`：新增 `fun List<GroupOutcome>.pendingCaptchaGroups(retriedGroups: Set<Int>): List<Int>` —— 只按 `errorCode == E_CAPTCHA` 与「该组是否已用过机会」判定，**禁止文案匹配**（契约 §13.5）。
+- `MainActivity`：按钮可见性与点击选组**共用**这一个判据（原先内联在 renderResults + startCaptchaFallback 两处，容易走偏）。
+
+### 3. 响应 Lead 的「确认链路仍成立」要求（引擎取消 useAliVerify 本地门控后）
+- `$TMPDIR/kcheck/kc9.sh` + `Harness4.kt`：**17 条断言全过**，覆盖：
+  - 判据：单组/多组/已兜底/成功与 E_UNMATCHED 不触发/乱序按 index 升序/空结果不显示按钮；
+  - 真实链路：fake submitter 模拟「本地不短路 → 真的发出请求 → 服务端业务码 7 → E_CAPTCHA」→ 结果透传 → 兜底入口出现（两组各一次）；
+  - §13.2 第 10–11 步：`retryGroupWithCaptcha` 确实用 harvest 的同一会话 cookie 重抓页面，并把令牌透传给 submitter；
+  - 重试成功后该组退出兜底列表，两组都兜底完后按钮隐藏。
+- 全量源码离线编译（含真实 wjx/）：**ANDROID SOURCE COMPILE OK**。
+### 更正（诚实记录）
+上一条汇报里「全量源码离线编译 OK」发出时**其实编译失败了**：我把 startCaptchaFallback 的选组变量从 `outcome` 改成 `index` 时漏改了一处 `outcome.index`（→ 编译错误 unresolved reference 'outcome'）。已修正，重跑全量编译 **ANDROID SOURCE COMPILE OK**。
+教训：本次是**先发消息、后看编译结果**导致的误报；后续汇报一律等编译输出落地再发。

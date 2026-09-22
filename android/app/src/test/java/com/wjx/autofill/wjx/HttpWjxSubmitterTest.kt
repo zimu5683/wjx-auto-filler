@@ -7,15 +7,17 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * 提交器的**零网络**分支（契约 §5.3 第 0 步门控 + §7 本地错误）。
+ * 提交器的**零网络**分支（契约 §5.3 本地错误 + §7 字段匹配）。
  *
- * 这些用例全部在发起网络请求之前返回，所以可以安全地在单测里跑：
- *   - useAliVerify=true 且无令牌 → E_CAPTCHA（httpStatus=0、raw=null）
+ * 关键口径（Lead 2026-09-22 裁定）：**useAliVerify 本地门控已取消** ——
+ * 引擎总是先尝试提交，只有服务端返回业务码 7/22 才判 E_CAPTCHA。
+ * 所以这里不再有「useAliVerify=true + 无令牌 → 本地 E_CAPTCHA」的用例；
+ * 改为证明它**确实走到了匹配 / URL 构造步骤**（若还有短路，这两种情况都会返回 E_CAPTCHA）：
+ *   - useAliVerify=true + 未匹配字段 → E_UNMATCHED
+ *   - useAliVerify=true + 非 wjx submitUrl → E_URL
  *   - 无有效答案 → E_EMPTY
- *   - 字段未匹配 → E_UNMATCHED
- *   - submitUrl 非 https wjx.cn → E_URL
- *   - useAliVerify=true 但**有**令牌 → 跳过门控（用未匹配字段证明它走到了匹配步骤，仍不发请求）
- * 真正联网的那条路径由 WjxEngineIntegrationTest 覆盖（默认跳过）。
+ * 真正联网（真的发出 POST）由 SubmitCoordinatorTest 的 fake submitter 与
+ * WjxEngineIntegrationTest（默认跳过）覆盖。
  */
 class HttpWjxSubmitterTest {
 
@@ -38,20 +40,23 @@ class HttpWjxSubmitterTest {
     )
 
     @Test
-    fun aliVerifyGateReturnsCaptchaWithoutToken() = runBlocking {
-        val result = HttpWjxSubmitter().submit(model(useAliVerify = true), listOf(AnswerPair("1", "张三")), null)
-
-        assertEquals(false, result.ok)
-        assertEquals(SubmitErrorCode.CAPTCHA, result.errorCode)
-        assertEquals("硬门控不应发请求 → httpStatus 0", 0, result.httpStatus)
-        assertNull("硬门控不应有响应体", result.raw)
-        assertTrue(result.message.contains("安全校验"))
+    fun useAliVerifyNoLongerShortCircuitsLocally() = runBlocking {
+        // 取消本地门控后：useAliVerify=true + 无令牌也必须走到匹配步骤（未匹配字段 → E_UNMATCHED，而不是 E_CAPTCHA）
+        val result = HttpWjxSubmitter().submit(model(useAliVerify = true), listOf(AnswerPair("不存在的字段", "x")), null)
+        assertEquals(SubmitErrorCode.UNMATCHED, result.errorCode)
+        assertEquals(0, result.httpStatus)
     }
 
     @Test
-    fun aliVerifyGateTreatsBlankTokenAsNoToken() = runBlocking {
-        val result = HttpWjxSubmitter().submit(model(useAliVerify = true), listOf(AnswerPair("1", "张三")), "   ")
-        assertEquals(SubmitErrorCode.CAPTCHA, result.errorCode)
+    fun useAliVerifyStillReachesUrlValidation() = runBlocking {
+        // 走到 URL 构造步骤：非 wjx 域名 → E_URL（同样证明没有被本地验证码门控短路）
+        val result = HttpWjxSubmitter().submit(
+            model(useAliVerify = true, submitUrl = "https://example.com/processjq.ashx"),
+            listOf(AnswerPair("1", "张三")),
+            null,
+        )
+        assertEquals(SubmitErrorCode.URL, result.errorCode)
+        assertEquals(0, result.httpStatus)
     }
 
     @Test
@@ -81,13 +86,19 @@ class HttpWjxSubmitterTest {
     }
 
     @Test
-    fun tokenBypassesGateAndReachesMatching() = runBlocking {
-        // 有令牌 → 跳过门控；用未匹配字段证明它确实走到了匹配步骤（若被门控会是 E_CAPTCHA），且仍未发请求
-        val result = HttpWjxSubmitter().submit(
+    fun tokenPresenceDoesNotChangeLocalOutcomes() = runBlocking {
+        // 门控删除后，令牌有无不再产生本地分支差异：两种情况都走到匹配 → E_UNMATCHED
+        val withoutToken = HttpWjxSubmitter().submit(
+            model(useAliVerify = true),
+            listOf(AnswerPair("不存在的字段", "x")),
+            null,
+        )
+        val withToken = HttpWjxSubmitter().submit(
             model(useAliVerify = true),
             listOf(AnswerPair("不存在的字段", "x")),
             "TOKEN-123",
         )
-        assertEquals(SubmitErrorCode.UNMATCHED, result.errorCode)
+        assertEquals(SubmitErrorCode.UNMATCHED, withoutToken.errorCode)
+        assertEquals(SubmitErrorCode.UNMATCHED, withToken.errorCode)
     }
 }

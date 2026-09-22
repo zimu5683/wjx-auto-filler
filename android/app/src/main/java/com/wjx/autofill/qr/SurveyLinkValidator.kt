@@ -26,7 +26,7 @@ object SurveyLinkValidator {
     private val QUESTION_MARKERS = listOf("divQuestion", "processjq", "hfAnswerData", "joinnew")
 
     private val SHORT_ID_URL_REGEX =
-        Regex("""^https://(www\\.)?wjx\\.cn/(vm|jq|m)/([A-Za-z0-9]{4,32})\\.aspx""")
+        Regex("""^https://([A-Za-z0-9-]+\.)*wjx\.cn/(vm|jq|m)/([A-Za-z0-9]{4,32})\.aspx""", RegexOption.IGNORE_CASE)
 
     private val URL_PATTERN = Regex("""https?://[^\s"'<>()（）【】\[\]]+""", RegexOption.IGNORE_CASE)
 
@@ -39,7 +39,8 @@ object SurveyLinkValidator {
     }
 
     /**
-     * 契约 §5.1 的 shortId 正则：^https://(www\.)?wjx\.cn/(vm|jq|m)/([A-Za-z0-9]{4,32})\.aspx
+     * shortId 正则：^https://([A-Za-z0-9-]+\.)*wjx\.cn/(vm|jq|m)/([A-Za-z0-9]{4,32})\.aspx
+     * 允许 wjx.cn 的**任意子域**（www / v / 其它），忽略大小写。
      * 从链接推导 shortId（MappingTemplate.shortId 用），推导不到返回 null。
      */
     fun shortIdOf(url: String): String? =

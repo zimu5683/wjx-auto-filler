@@ -4,7 +4,7 @@
 
     <!-- 顶部 -->
     <string name="label_survey_link">问卷链接</string>
-    <string name="hint_survey_link">https://www.wjx.cn/vm/xxxxxxx.aspx</string>
+    <string name="hint_survey_link">https://wjx.cn/vm/xxxxxxx.aspx</string>
     <string name="action_scan">扫码</string>
     <string name="action_gallery">相册</string>
     <string name="action_parse">解析问卷</string>
@@ -89,7 +89,7 @@
     <string name="result_hint_network">请检查网络后重试（提交不会自动重试，避免重复答卷）。</string>
     <string name="result_hint_unsupported">该题型暂不支持自动填写，请在官方页面手工完成。</string>
     <string name="result_hint_rejected">服务端拒绝了本次提交，原文见上。</string>
-    <string name="result_hint_url">请检查问卷链接是否为 https://www.wjx.cn/vm/xxxx.aspx 形式。</string>
+    <string name="result_hint_url">请检查问卷链接是否为 https://wjx.cn/vm/xxxx.aspx 形式（支持任意 wjx.cn 子域）。</string>
 
     <!-- 题目清单 -->
     <string name="dialog_questions_title">题目清单</string>

@@ -128,8 +128,33 @@ object WjxSubmitRequest {
 - 公开 hPyt0iq（useAliVerify=0）：`sceneId=null 来源=无`，不发 JS 请求 → `evidence/07-dry-run-public-useAliVerify0.txt`
 - 冒烟：`evidence/04-engine-smoke.log` → **PASS=84 FAIL=0**（+13 条 sceneId 分支）
 
+## 2026-09-22 · T11 业务码 22 深挖（task-10）—— 结论反转：纯接口在 useAliVerify=0 的问卷上**可以成功**
+
+**背景**：用户新样本 https://v.wjx.cn/vm/P2M09FG.aspx（useAliVerify=0），Lead 真发 1 次得裸码 `22`。
+**做法**：`tools/wjx-probe/t11-submit-variant.mjs`，每次只改一个变量，共 7 次提交（S0 + V1–V6 + V6q），全部留原始请求/响应。
+
+**决定性结果**
+- **V6**（P2M09FG，只把 ktimes 0→4，其余同 S0：不发 rn/cst/source、不发 captchaVerifyParam/sceneId）
+  → `10〒/wjx/join/complete.aspx?activityid=P2M09FG&joinid=127844297308&sojumpindex=1&comsign=…` **提交成功**。
+- **V6q**（Q0DQewW，useAliVerify=1，同款最小形态）→ `7〒需要安全校验，请重新提交！` → **真拦截**。
+- ktimes=0 一律得**裸码 22**（无 〒、Content-Length=2）——真实用户不可能产生的值导致的机器人指纹。
+- V3/V4/V5（ktimes=4 且补发 rn + captchaVerifyParam/sceneId）→ 7；V6（都不发）→ 10。
+  ∴ **补发这些字段反而把成功推向失败**；cst/source 已被 V4/V5 排除；rn 与 body 两字段未单独分离（引擎两个都不发，行为不受影响）。
+- 10 与 11 都是成功码（JS @148535 / @156436 / @159634，逐字证据见结论文档）。
+
+**由此落地的引擎修改**（Lead 裁定）
+1. `WjxSubmitRequest.buildSubmitUrl`：`&ktimes = max(4, m.ktimes)`，jqsign 用**同一个** effective ktimes（0/1/2/3→4 会改变 XOR key，实现同源）。
+2. `HttpWjxSubmitter.submit`：**取消本地 useAliVerify 门控**——总是先真实提交，只有服务端回 7/22 才判 E_CAPTCHA（本地判定会产生假阴性）。
+
+**验证**：离线编译 EXIT=0；JVM 冒烟 **93 PASS / 0 FAIL**（新增 ktimes 下限/透传 4 条 + URL 子域 5 条）→ `evidence/04-engine-smoke.log`；干跑刷新 `evidence/05-dry-run-sample.txt`、`12-dry-run-v-subdomain.txt`。
+
+**证据**：`evidence/11-t11-conclusion.md`（矩阵 + JS 逐字 + 未验证项）、`11-v1..v6,v6q-*.txt|json`、脚本 `t11-submit-variant.mjs`（支持自定义 URL 与证据前缀）。
+
 ## 未验证 / 已知限制
-1. 未在 `useAliVerify=0` 的问卷上做真实提交（Lead 裁决：不污染他人问卷）。因此"纯 HTTP 对未开启安全校验的问卷可行"仍是**强假设**，唯一硬证据要等用户在自己问卷上跑通兜底路径（WebView 点一次验证码 → 拿到 code 10）。
+0. （T11 已推翻旧条目 1、2，保留编号便于追溯）
+1. ~~未在 useAliVerify=0 的问卷上做真实提交~~ → **T11 V6 已证明可成功（业务码 10）**；useAliVerify=1（Q0DQewW）经 V6q 实测确认为真拦截。
+2. ~~服务端业务码 22 为 JS 推导~~ → **T11 已拿到真实裸码 22（ktimes=0）**；7/22 均为"要求安全校验"。
+2b. 新增未验证：rn 与 captchaVerifyParam/sceneId 谁把 10 变成 7；ktimes=1 是否等效（已用实测值 4 绕开）；useAliVerify=1 是否全都拦截（只测了 1 个样本）。通兜底路径（WebView 点一次验证码 → 拿到 code 10）。
 2. 服务端业务码 22（`submit_need_validate2`）为 JS 推导，未拿到真实响应；映射表在 `WjxResponseClassifier` 单点可改。
 3. 分页问卷（E_PAGED）、矩阵/量表/商品题（E_UNSUPPORTED）只做了静态实现与 fixture 解析，没有端到端提交验证。
 4. `sceneId` 实测不在问卷页 HTML 内（来自 wjx_captch.js 的全局常量），解析结果恒为 null —— 按契约该字段缺省即不携带，符合预期。

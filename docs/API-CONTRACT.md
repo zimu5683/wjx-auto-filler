@@ -22,7 +22,9 @@
 
 页面同时含 `useAliVerify=1`、`captchaType='2'`、`needLoadAliVerify=1`【实测】。
 
-**T3 结论（2026-09-22 实测）：强制拦截。** 纯接口 POST 得到 HTTP 200 + 正文 `7〒需要安全校验，请重新提交！`（43 B），业务码 `7` 对应页面 JS 的「弹阿里云智能验证」分支 → **本样本问卷无法纯接口提交**，引擎对这类问卷必须返回 `E_CAPTCHA`（见 §11）。后续端到端提交验证必须换一份**未启用阿里云验证码**的问卷。
+**T3 结论（2026-09-22 实测）：强制拦截。** 纯接口 POST 得到 HTTP 200 + 正文 `7〒需要安全校验，请重新提交！`（43 B），业务码 `7` 对应页面 JS 的「弹阿里云智能验证」分支 → **本样本问卷无法纯接口提交**，引擎对这类问卷必须返回 `E_CAPTCHA`（见 §11）。
+
+**T14 事实与修正（2026-09-22）：** 新样本 `https://v.wjx.cn/vm/P2M09FG.aspx`（`v.wjx.cn` 短链）页面 `useAliVerify=0`，最初一次提交返回**裸码 22**（曾被解读为「服务端主动要求二次校验」）。**随后 api-debug 的干净单变量 A/B（V6）推翻了该解读**：唯一变量 `ktimes: 0 → 4`（且不补发 `rn`/`captchaVerifyParam`/`sceneId`）后，同一问卷返回 **`10〒/wjx/join/complete.aspx?activityid=P2M09FG&joinid=127844297308&…`** —— **纯接口提交成功**。→ ① URL 正则必须接受 wjx.cn **任意子域**（§5.1）；② 裸 22 是 **`ktimes=0` 触发的风控指纹**，不是「问卷需要验证码」；③ `useAliVerify=0` 的问卷**可以纯接口提交**（前提：`ktimes≥4`（契约取下限 4） 且不补发校验类字段，§5.3）；④ `useAliVerify=1` 的问卷仍被服务端要求安全校验（T3 样本 → 7），走 §13 兜底。 **用户本人也确认：他在微信里扫这张二维码填写，没有弹人机验证** —— 独立佐证「该问卷不需要人机验证」。
 
 **注意：样本问卷只有填空题，没有单选/多选/矩阵题。** 单选/多选/下拉/矩阵分支无法在该样本上端到端验证，qa-build 必须用单元测试 + 构造的 HTML fixture 覆盖（见第 12 章）。
 
@@ -58,7 +60,7 @@ data class SurveyModel(
     val questions: List<SurveyQuestion>, val submitUrl: String,
     val jqnonce: String, val ktimes: Int, val startTime: String,
     val captchaType: Int?, val cookies: Map<String, String>,
-    val useAliVerify: Boolean = false,   // Lead 2026-09-22 改判后 additive：页面 var useAliVerify=1 时为 true（E_CAPTCHA 硬门控）
+    val useAliVerify: Boolean = false,   // Lead 2026-09-22 改判后 additive：页面 var useAliVerify=1 时为 true；**仅作展示，不参与门控**
     val sceneId: String? = null)          // Lead 2026-09-22 批准（additive）：阿里云验证场景标识（captchaSceneid）；缺省时提交不携带该字段
 data class AnswerPair(val field: String, val value: String)
 data class SubmitResult(val ok: Boolean, val httpStatus: Int, val message: String, val raw: String?,
@@ -118,7 +120,7 @@ object SubmitErrorCode {
 | `SurveyModel` | `ktimes` | Int | 页面 `ktimes`，缺失默认 `0` | 否 |
 | `SurveyModel` | `startTime` | String | `#starttime` 的 value，缺失空串 | 否 |
 | `SurveyModel` | `captchaType` | Int? | 页面 `captchaType`；`null` = 页面未声明验证码。**只用于 URL 的 `&capt=` 参数，不是门控信号** | **是** |
-| `SurveyModel` | `useAliVerify` | Boolean | 页面 `var useAliVerify`：`1`→`true`、缺失→`false`。**验证码硬门控信号**（§11.3） | 否（默认 `false`） |
+| `SurveyModel` | `useAliVerify` | Boolean | 页面 `var useAliVerify`：`1`→`true`、缺失→`false`。**仅作展示/诊断，不参与判定**（本地门控已废除，§5.3 第 0 步） | 否（默认 `false`） |
 | `SurveyModel` | `sceneId` | String? | 阿里云验证场景标识（页面 `captchaSceneid`/验证码初始化配置）。**Lead 已批准 additive**；`captchaToken` 非空且 `sceneId` 非空时写入 body；**缺省 → 不携带该字段**（本地不拦截，由服务端判定） | **是**（默认 `null`） |
 | `SurveyModel` | `cookies` | Map<String,String> | fetch 结束时的 cookie 快照（name→value，跳过空值） | 否（可为空 Map） |
 | `AnswerPair` | `field` | String | 映射键：题号 / 题干片段 / 选项文本（优先级 R1>R2>R3，§7） | 否（blank 由调用方过滤） |
@@ -213,7 +215,7 @@ data class AnswerGroup(val name: String, val pairs: List<AnswerPair>)
 data class MappingTemplate(
     val id: String,                 // UUID 字符串，1..64
     val name: String,               // 1..60
-    val surveyUrl: String,          // 必填，https://(www.)?wjx.cn/(vm|jq|m)/<shortId>.aspx
+    val surveyUrl: String,          // 必填，https://<任意子域>.wjx.cn/(vm|jq|m)/<shortId>.aspx
     val shortId: String,            // ^[A-Za-z0-9]{4,32}$，可与 surveyUrl 互推
     val groups: List<AnswerGroup>,  // 可为空（空模板允许保存，提交时明确报错）
     val concurrency: Int = 2,       // 1..5，默认 2
@@ -256,7 +258,7 @@ data class ImportReport(
         "properties": {
           "id":          { "type": "string", "minLength": 1, "maxLength": 64 },
           "name":        { "type": "string", "minLength": 1, "maxLength": 60 },
-          "surveyUrl":   { "type": "string", "pattern": "^https://(www\\.)?wjx\\.cn/(vm|jq|m)/[A-Za-z0-9]{4,32}\\.aspx" },
+          "surveyUrl":   { "type": "string", "pattern": "^https://([A-Za-z0-9-]+\\.)*wjx\\.cn/(vm|jq|m)/[A-Za-z0-9]{4,32}\\.aspx" },
           "shortId":     { "type": "string", "pattern": "^[A-Za-z0-9]{4,32}$" },
           "concurrency": { "type": "integer", "minimum": 1, "maximum": 5, "default": 2 },
           "updatedAt":   { "type": "integer", "minimum": 0, "default": 0 },
@@ -358,8 +360,8 @@ data class ImportReport(
 | fetch 超时 | connect 10s / read 20s |
 | submit 超时 | connect 10s / read 30s |
 | `RAW_LIMIT` | 8192 字符（`SubmitResult.raw` 与日志截断上限） |
-| 允许的 host | `wjx.cn`、`www.wjx.cn`（含子域 `*.wjx.cn`）；**必须 https** |
-| shortId 正则 | `^https://(www\.)?wjx\.cn/(vm\|jq\|m)/([A-Za-z0-9]{4,32})\.aspx`（只锚定前缀：允许链接带 query/fragment，如 `?q1=Q0DQewW&q2=1`；不允许其它 path 形态） |
+| 允许的 host | `wjx.cn` 及其**任意子域**（`www.wjx.cn`、`v.wjx.cn` 等）；**必须 https** |
+| shortId 正则 | `^https://([A-Za-z0-9-]+\.)*wjx\.cn/(vm\|jq\|m)/([A-Za-z0-9]{4,32})\.aspx`（**wjx.cn 任意子域**：`www.`/`v.` 等短链都接受；只锚定前缀，允许 query/fragment，如 `?q1=Q0DQewW&q2=1`；不允许其它 path 形态） |
 
 ### 5.2 fetch(url)：Result<SurveyModel>
 
@@ -375,22 +377,27 @@ data class ImportReport(
 
 ### 5.3 submit(m, answers)：SubmitResult
 
-流程（**第 0 步是硬门控**）：
-0. **验证码门控（不发网络请求）**：若 `m.useAliVerify == true` 且未提供有效 `captchaToken` → 立即返回 `errorCode=E_CAPTCHA`、`message="该问卷开启了安全校验（阿里云验证码），纯接口无法提交"`（`httpStatus=0`、`raw=null`；不做字段匹配、不发任何请求）。带令牌的兜底路径见 §13。
+流程（**第 0 步：不做本地门控，总是先尝试提交**）：
+0. **不做本地验证码门控（Lead 2026-09-22 改判）：总是先尝试提交。** 无论 `m.useAliVerify` 为何值、无论是否带 `captchaToken`，都**一律先发一次真实提交**；只有 §8.4 响应分类器判出 `E_CAPTCHA`（业务码 7/22 或响应含 `aliyunwaf`）才进入 §13 兜底。**理由**：本地门控会产生**假阴性**——`useAliVerify=1` 的问卷可能本来能提交，却被引擎在本地直接判 `E_CAPTCHA`、一次请求都没发；而「总是先试」的代价只是多一次被拒的 HTTP 请求（**不产生答卷**）。`m.useAliVerify` 仅作展示/诊断，**不参与任何判定**。
 1. 本地校验：`answers` 过滤掉 `value.isBlank()` 的项后为空 → `errorCode=E_EMPTY`、`message="没有可提交的答案"`（`httpStatus=0, raw=null`）。
 2. 字段匹配（第 7 章）→ 失败 → `errorCode=E_UNMATCHED`、`message="字段未匹配：<明细>"`。
 3. `submitdata = WjxSubmitCodec.encodeSubmitData(pairs)`。
 4. 构造 URL：`m.submitUrl` 追加查询参数（都用 `URLEncoder.encode(v,"UTF-8")`），**顺序无关**（ASP.NET 不校验）：
-   `&starttime=<urlenc(m.startTime)>`（仅当 `startTime` 非空白时携带）
-   `&ktimes=<ktimes>&t=<System.currentTimeMillis()>&jqnonce=<jqnonce>&jqsign=<jqSign(jqnonce, ktimes)>`，
-   且当 `m.captchaType != null` 时追加 `&capt=<captchaType>`【JS，T3 已实测确认】。
-   `m.submitUrl` 必须以 https 开头且 host ∈ wjx.cn，否则 `E_URL`。
+   - `&starttime=<urlenc(m.startTime)>`（仅当 `startTime` 非空白时携带）
+   - **`&ktimes=<effectiveKtimes>`，其中 `effectiveKtimes = max(4, m.ktimes)`**（Lead 2026-09-22 裁定：下限取已验证值 4，见 §11 D6）
+   - `&t=<System.currentTimeMillis()>&jqnonce=<urlenc(m.jqnonce)>&jqsign=<urlenc(jqSign(m.jqnonce, effectiveKtimes))>`
+   - 当 `m.captchaType != null` 时追加 `&capt=<captchaType>`【JS，T3 已实测确认】
+   `m.submitUrl` 必须以 https 开头且 host ∈ wjx.cn（含子域），否则 `E_URL`。
    （T3 实测页面构造顺序为 `starttime→cst→source→ktimes→capt→t→jqnonce→jqsign`；`cst`/`source` 语义未确认，**V1 不发送**。）
+
+**ktimes 变更影响说明（下限 4 版本，务必与「下限 1」的旧稿区分）**：XOR key = `ktimes % 10`（0 时取 1）。下限取 **4** 后，**`ktimes=0/1/2/3` 的页面都会变成 4 → key 从 1 变为 4 → `jqsign` 也随之改变**（这是预期行为：URL 数值与签名必须同源）。实现必须用**同一个 `effectiveKtimes`** 生成 `&ktimes=` 与 `jqsign`，否则服务端校验失败。
+
+   **证据（已验证的关键修复，不是保守猜测）**：V6 干净单变量 A/B（与 S0 只差 `ktimes` 0→4）在 `useAliVerify=0` 的问卷上返回 **业务码 10 = 提交成功**（`10〒/wjx/join/complete.aspx?...&joinid=127844297308`）；**下限取已验证值 4**（Lead 2026-09-22 裁定）：`ktimes=1` 从未测过，不拿未验证的值去赌。规则：`effectiveKtimes = max(4, m.ktimes)`，**不设上限**（页面原值更大时保持原值）。**不再使用「ktimes>0 即有效」这类推断措辞**——有效性的直接证据只有 `ktimes=4`。
 5. POST body（`application/x-www-form-urlencoded; charset=UTF-8`）：
    - `submitdata=<urlenc(submitdata)>`（**唯一必发字段**）
    - **不发送** `starttime`（T3 实测它在 URL query 上，见第 4 步）
    - 若 `captchaToken` 非空（§13 兜底路径）：追加 `captchaVerifyParam=<urlenc(captchaToken)>`；**仅当 `m.sceneId` 非空时**再追加 `sceneId=<urlenc(m.sceneId)>`（缺省 → 不带该字段；本地不做必填校验，由服务端判定——Lead 2026-09-22 裁决）。
-   - 若 `captchaToken` 为空：**绝不携带** `captchaVerifyParam`/`sceneId`（伪造令牌是禁止行为）。
+   - 若 `captchaToken` 为空：**绝不携带** `captchaVerifyParam`/`sceneId`，也**不补发 `rn`/`lct`/`jpm`/`cst`/`source`**。**理由已升级为实测（T11/V6）**：发送这些字段会把成功（业务码 10）变成 `7〒需要安全校验，请重新提交！`；其中 `cst`/`source` 已排除，`rn` 与 body 类字段为**嫌疑但尚未分离** —— 因此 V1 一律不发。 **V3/V4/V5 实测再次确认**：补发 `captchaVerifyParam`/`sceneId`/`rn` 会把结果从 10 推向 7 → **最小请求形态（V6）才是正确形态**；这条「不发」的决定是契约硬约束，不得为了「更保真」而补发。
 6. Cookie：把 `m.cookies` 以 `Cookie: k=v; k2=v2` 形式附上；用**新的** `HttpURLConnection`（不复用 fetch 的连接）。
 7. 响应分类（第 8.4 节）→ `SubmitResult`。
 8. **绝不自动重试**：提交不是幂等操作，重试可能产生重复答卷。重试只能由用户显式点击触发（`SubmitCoordinator` 不重试）。
@@ -441,10 +448,10 @@ data class ImportReport(
 | `shortId` | 由 URL 正则捕获组 | 必填（否则 E_URL） |
 | `submitUrl` | `<form id="form1" ... action="...">` 的 action（页面给的是绝对 https 地址）；否则回退 `https://www.wjx.cn/joinnew/processjq.ashx?shortid=<shortId>` | 回退值 |
 | `jqnonce` | 正则 `var\s+jqnonce\s*=\s*["']([^"']+)["']` | **缺失 → E_PARSE** |
-| `ktimes` | 正则 `var\s+ktimes\s*=\s*(\d+)` | 默认 `0`（页面 JS 初始化为 0，XOR key 变成 1） |
+| `ktimes` | 正则 `var\s+ktimes\s*=\s*(\d+)` | 默认 `0`（页面 JS 初始化为 0）；**提交时统一取 `max(4, ktimes)`**（Lead 裁定：下限取 V6 已验证值 4）。注意：0/1/2/3 → 4 会**改变 XOR key（1→4）从而改变 `jqsign`**，URL 数值与签名必须同源（见 §5.3 第 4 步） |
 | `startTime` | `id="starttime"` 的 `value` 属性 | `""` |
 | `captchaType` | 正则 `captchaType\s*=\s*['"]?(\d+)['"]?` | 若 `useAliVerify=1` 或 `needLoadAliVerify=1` → `2`；否则 `null`。**仅用于 `&capt=` 参数，不作门控** |
-| `useAliVerify` | 正则 `var\s+useAliVerify\s*=\s*(\d+)` | 缺失 → `false`；`1` → `true`（**E_CAPTCHA 硬门控**，§5.3 第 0 步） |
+| `useAliVerify` | 正则 `var\s+useAliVerify\s*=\s*(\d+)` | 缺失 → `false`；`1` → `true`。**仅作展示/诊断，不作门控**（Lead 2026-09-22 改判：总是先尝试提交） |
 | `cookies` | fetch 结束后 CookieManager 快照（name→value，跳过空值） | 空 Map |
 
 ### 6.5 分页问卷检测（V1 不支持，必须显式报错）
@@ -515,7 +522,7 @@ data class ImportReport(
 | `E_HTTP` | 实际码 | 问卷服务器返回异常（HTTP %d） | fetch/submit 非 2xx |
 | `E_PARSE` | 200 | 问卷页面解析失败，可能是问卷已关闭或页面改版 | 无 jqnonce / 无题目 / 响应非 HTML |
 | `E_PAGED` | 200 | 该问卷为分页/逐题模式，暂不支持自动填写 | 6.5 检测命中 |
-| `E_CAPTCHA` | 实际码（硬门控时为 0） | 该问卷开启了安全校验（阿里云验证码），纯接口无法提交 | `useAliVerify==true` 且无 `captchaToken`（硬门控，§5.3 第 0 步）；业务码 `7`/`22`；或响应含 `aliyunwaf`/验证码特征（T3 实测样本：`7〒需要安全校验，请重新提交！`） |
+| `E_CAPTCHA` | 实际码 | 该问卷开启了安全校验（阿里云验证码），纯接口无法提交 | **仅由响应判定**：业务码 `7`/`22`；或响应含 `aliyunwaf`/验证码特征（T3 实测样本：`7〒需要安全校验，请重新提交！`）。**本地不再有任何门控触发**（§5.3 第 0 步已废除） |
 | `E_UNMATCHED` | 0 | 字段未匹配：<明细> | 第 7.2 节 |
 | `E_EMPTY` | 0 | 没有可提交的答案 | 过滤空值后 answers 为空 |
 | `E_LIMIT` | 0 | 答案超过 3000 字上限（题号 %d） | 文本超长 |
@@ -543,9 +550,13 @@ data class ImportReport(
 1. HTTP 非 2xx → `errorCode=E_HTTP`、`message="问卷服务器返回异常（HTTP %d）"`、`raw`=正文前 8192 字符。
 2. 正文为空 → `errorCode=E_PARSE`、`message="响应为空"`。
 3. 正文含 `aliyunwaf`（忽略大小写）→ `errorCode=E_CAPTCHA`（与页面 JS 同款判定【JS】）。
-4. 以 `〒` 分割取**首段**并 trim，记 `code`（**协议层事实优先：先解析业务码，不得只做关键词匹配**——真实拦截响应里一个关键词都没有）：
-   - `code == "10"` **【服务端实测确认】** 或 `code == "11"` **【JS 分支推导，未经服务端实测】** → **成功**：`ok=true`、`errorCode=null`、`message="提交成功"`（JS `afterSubmit`：10/11 均走成功日志分支 `addpostlog(v,4,…)`）；
-   - `code == "7"` **【服务端实测确认】** 或 `code == "22"` **【JS 分支推导，未经服务端实测】** → `errorCode=E_CAPTCHA`、`message="该问卷开启了安全校验（阿里云验证码），纯接口无法提交"`（**终态**：UI 不提供「重试」；服务端文案保留在 `raw`）。22 = `submit_need_validate2`；
+4. **解析业务码 `code`（两种形态都要支持；协议层事实优先，不得只做关键词匹配——真实拦截响应里一个关键词都没有）**：
+   - **裸码形态**（api-debug T11 实测：`ktimes=0` 时服务端回**裸 `22`**，无 `〒`、无文案）：若 `body.trim()` 匹配 `^\d{1,3}$` → `code` = 该数字；
+   - **带文案形态**：以 `〒` 分割取首段并 trim → `code`。
+
+   映射：
+   - `code == "10"` **【服务端实测确认】** 或 `code == "11"` **【JS 逐字证据（T11 钉死），未经服务端实测】** → **成功**：`ok=true`、`errorCode=null`、`message="提交成功"`。JS 逐字证据：`@148535` `10==a` → 成功 UI + `complete.aspx`；`@156436` `if(11==a){…clearAnswer(),addtolog(f),…location.replace(f)}`（`n[1]`=跳转 URL、`n[3]`=joinid）；`@159634` `if(11==a)return;`；
+   - `code == "7"` 或 `code == "22"` —— **两者同义**（都表示「要求安全校验」，都会弹阿里云验证码）：`hintinfo.js` 定义 `submit_need_validate2="需要安全校验，请重新提交！"`，且 `7==a` 与 `22==a` 两个分支都执行 `isCaptchaValid=false; useAliVerify=1; loadCaptchShow()`。**均已服务端实测确认**（7 = T3 真实响应 `7〒需要安全校验，请重新提交！`；22 = Lead 实测 `useAliVerify=0` 仍返回 22，且 T11 实测 `ktimes=0` 回**裸 22**）→ `errorCode=E_CAPTCHA`、`message="该问卷开启了安全校验（阿里云验证码），纯接口无法提交"`（**终态**：UI 不提供「重试」；服务端文案保留在 `raw`）；
    - 其他纯数字 **【默认规则】** → `errorCode=E_REJECTED`、`message="问卷服务端拒绝：" + 第二段`（无第二段则取正文前 200 字）。
 5. 解析不出业务码（正文不含 `〒` 或首段非数字）→ 退回**关键词启发式**：含 `aliyunwaf`/`captcha`/`验证码`/`安全校验` → `errorCode=E_CAPTCHA`。
 6. 仍不匹配：正文以 `<html` 开头 → `errorCode=E_PARSE`、`message="服务端返回页面而非结果"`；否则 → `errorCode=E_UNKNOWN`、`message="未知错误：" + 正文前 200 字`。
@@ -555,7 +566,10 @@ data class ImportReport(
 | 输入正文 | HTTP | 期望 |
 |---|---|---|
 | `7〒需要安全校验，请重新提交！`（T3 真实响应） | 200 | `ok=false`、`errorCode=E_CAPTCHA`、`message` 含「安全校验」、`raw` 保留原文 |
-| `10〒` | 200 | `ok=true`、`errorCode=null`、`message="提交成功"` |
+| `10〒`（构造用例；业务码来自 JS `@148535` 成功分支） | 200 | `ok=true`、`errorCode=null`、`message="提交成功"` |
+| `10〒/wjx/join/complete.aspx?activityid=P2M09FG&joinid=127844297308&sojumpindex=1&comsign=B1CA04F4DA75182824F45478C7B42CDAF5DA2878`（**V6 真实成功响应**） | 200 | `ok=true`、`errorCode=null`、`raw` 保留原文 |
+| `22`（**裸码，无 `〒` 无文案**；T11 实测 `ktimes=0` 的真实响应） | 200 | `ok=false`、`errorCode=E_CAPTCHA`、`raw="22"` |
+| `11〒https://www.wjx.cn/wjx/join/completemobile2.aspx?...`（构造用例；JS `@156436`） | 200 | `ok=true`、`errorCode=null` |
 | `<html><script>...aliyunwaf...</script>` | 200 | `ok=false`、`errorCode=E_CAPTCHA` |
 | ``（空正文） | 200 | `ok=false`、`errorCode=E_PARSE` |
 | `5〒请输入正确的学号` | 200 | `ok=false`、`errorCode=E_REJECTED`、`message` 含「请输入正确的学号」 |
@@ -566,11 +580,13 @@ data class ImportReport(
 |---|---|---|
 | `10` | 成功 | **服务端实测确认**（JS 成功分支 + 页面逻辑） |
 | `7` | `E_CAPTCHA` | **服务端实测确认**（T3 真实响应 `7〒需要安全校验，请重新提交！`） |
-| `11` | 成功 | JS 分支推导，**未经服务端实测** |
-| `22` | `E_CAPTCHA` | JS 分支推导，**未经服务端实测** |
+| `11` | 成功 | **JS 逐字证据（T11：`@156436`/`@159634`）**，未经服务端实测 |
+| `22` | `E_CAPTCHA` | **服务端实测确认**（Lead：`useAliVerify=0` 的问卷仍返回 22；T11：`ktimes=0` 回**裸 22**）+ JS 逐字证据（`submit_need_validate2`，与 7 同分支） |
 | 其他数字 | `E_REJECTED` | 默认规则 |
 
 Lead 2026-09-22 已批准 `11→成功`、`22→E_CAPTCHA`（要求与实测项区分来源等级，即上表）。映射表是**唯一改动点**，复测有出入只改一行。
+
+**证据出处**：`tools/wjx-probe/evidence/` —— T11 业务码矩阵 + JS 逐字证据（`11-t11-conclusion.md`；其中「服务端强制二次校验 / 纯接口不可行」的结论**已作废**，以 V6 干净 A/B 为准）、`11-v1..v5` 与 **v6** 原始请求/响应。
 
 **铁律：HTTP 200 绝不等于提交成功。** 问卷星用 200 返回业务错误（T3 实测：被验证码拦截时 HTTP=200、正文=`7〒需要安全校验，请重新提交！`）。成功判定必须走第 4 条；所有成功/失败判定集中在 `WjxResponseClassifier` 一个函数里。
 
@@ -644,18 +660,19 @@ class SubmitCoordinator(
 
 | # | 问题 | 实测结论 | 对契约的影响 |
 |---|---|---|---|
-| D1 | 验证码是否强制拦截 | **强制拦截**，但门控信号是 **`useAliVerify`**（不是 `captchaType`，见 §11.3）：HTTP 200 + `7〒需要安全校验，请重新提交！`（43 B） | 样本问卷纯接口不可提交；`useAliVerify==true` → 直接 `E_CAPTCHA`；分类器把 7/22 归 `E_CAPTCHA`（§8.4） |
-| D2 | 成功响应前缀 | 未直接观测（被 D1 挡住）。JS `afterSubmit`：10=成功、11 亦走成功分支、7=需安全校验、22=submit_need_validate2 | §8.4：10/11=成功，7/22=`E_CAPTCHA`，其余数字=`E_REJECTED` |
+| D1 | 验证码是否强制拦截 | **V6 已把两种情况分离**：`useAliVerify=1`（T3 样本）→ 服务端强制要求安全校验（`7〒需要安全校验，请重新提交！`）；`useAliVerify=0` + `ktimes≥4` + 不补发校验类字段 → **纯接口可成功**（V6 实测 `10〒/complete.aspx?joinid=127844297308`）。**裸 22 由 `ktimes=0` 触发，不是问卷属性** | 引擎：`useAliVerify==true` → 直接 `E_CAPTCHA`；`useAliVerify==false` 正常提交并由 §8.4 分类器兜底；§13 兜底仍是 `useAliVerify=1` 问卷的常规路径 |
+| D2 | 成功响应前缀 | **T11 已钉死**：10/11 均成功（11 有 JS 逐字证据）；7/22 同义=要求安全校验；且**裸码无 `〒` 也按业务码解析**（实测 `ktimes=0` 回裸 22） | §8.4：10/11=成功，7/22=`E_CAPTCHA`，其余数字=`E_REJECTED`；已落地 |
 | D3 | `starttime` 位置 | **在 URL query**（`&starttime=<urlenc>`），不在 body；服务端接受 | §5.3 第 4/5 步已改：query 携带，body 只发 submitdata |
 | D4 | `&capt=2` | 确认在 URL 上；实测仍被码 7 拦下。`captchaVerifyParam`/`sceneId`（sceneId=`q0hcfsca`）属 POST body | §5.3 保留 `&capt`；**不发送** captchaVerifyParam/sceneId |
 | D5 | 额外签名参数（rn/lct/jpm） | 本问卷均未出现（`window.rndnum`/`relsign` 未定义） | V1 只发 jqnonce/jqsign/ktimes/t/capt/starttime |
+| D6 | `&ktimes=` 下限取值 | **已定案（Lead 2026-09-22）：`max(4, 页面ktimes)`** —— 下限取**已验证值 4**（V6 单变量 A/B：0→4 使同一 `useAliVerify=0` 问卷从裸 22 变为 `10〒` 成功，joinid=127844297308）；**不取未测的 1**。**影响**：0/1/2/3 → 4 会改变 XOR key（1→4）→ **`jqsign` 随之改变**，URL 与签名必须同源（§5.3 第 4 步）。**已撤销**「ktimes>0 即有效」的推断措辞 | 已同步 §5.3/§6.4 + 引擎 + 单测 |
 
 补充实测：题目列表来自服务端渲染 HTML（无需 XHR）；页面构造的 URL 参数顺序为 `starttime→cst→source→ktimes→capt→t→jqnonce→jqsign`（顺序无关；`cst`/`source` 语义未确认，V1 不发送）。
 
 ### 11.2 由此产生的两条强制规则
 
 1. **`E_CAPTCHA` 是终态**：UI 不提供重试（重试必然同样被拦），并在会话内记住该 URL 的结论，避免重复无效提交。
-2. **`useAliVerify == true` 硬门控（normative，Lead 2026-09-22 改判）**：实测 6 个问卷的 `captchaType` **全部为 `'2'`**，只有 `useAliVerify` 能区分是否强制校验（样本=1 被拦；5 个公开问卷=0 放行）→ 用 `captchaType` 门控会把 **100% 的问卷判死**。因此：`useAliVerify == true` 且无 `captchaToken` 时，`submit` **不发网络请求**直接返回 `E_CAPTCHA`（§5.3 第 0 步）。响应分类器（§8.4）继续保留，用于页面改版或解析失败时兜底。
+2. **不做本地验证码门控（Lead 2026-09-22 改判，废除上一版「`useAliVerify==true` 硬门控」）**：无论 `useAliVerify` 为何值都**先发一次提交**，只有响应业务码 7/22（或 aliyunwaf）才走 §13 兜底。理由：本地门控的**假阴性**代价（把本可提交的问卷判死，一次请求都不发）大于多一次被拒请求的代价（**不产生答卷**）。`useAliVerify` 仅作展示。
 
 **以上全部是 §5.3/§8.4 的行为调整；第 2 章签名只增加了 Lead 批准的 additive 字段/参数（`errorCode`、`useAliVerify`、`captchaToken`，均带默认值），其余签名不变。**
 
@@ -671,9 +688,10 @@ class SubmitCoordinator(
 
 **结论（normative）**：
 1. 门控只用 `useAliVerify`；`captchaType` 仅用于构造 `&capt=` 参数。
-2. `useAliVerify == true` 且无 `captchaToken` → `submit` 零网络请求返回 `E_CAPTCHA`（终态）。
+2. **已废除（Lead 2026-09-22 改判）**：不再做本地门控；`useAliVerify` 只作展示，提交一律先发，响应为 7/22 才走兜底。
 3. `useAliVerify` 解析不到（页面改版）→ 默认 `false`，靠 §8.4 响应分类器兜底（此时 `captchaType` 也**不得**作为门控）。
 4. **唯一例外**：用户已批准「仅验证码环节」的 App 内 WebView 兜底（§13），此时 `captchaToken != null` 则跳过第 0 步门控。
+5. **修正（V6 单变量 A/B，2026-09-22）：`useAliVerify=0` 的问卷可以纯接口提交。** 此前观察到的「`useAliVerify=0` 仍返回裸 22」是 **`ktimes=0` 触发的风控指纹**，不是问卷属性——唯一变量 `ktimes: 0→4` 后，同一问卷返回 `10〒/complete.aspx?joinid=127844297308`（成功）。正确口径：① `useAliVerify` 只是页面**初始值 / 快速门控**；② `useAliVerify=0` + `ktimes≥4` + **不补发 `rn`/`captchaVerifyParam`/`sceneId` 等字段** → 可纯接口成功；③ `useAliVerify=1` 的问卷仍会被要求安全校验，走 §13 兜底（对这类问卷是常规路径）；④ §8.4 响应分类器**仍然必需**（服务端可在响应里返回 7/22）。
 
 ---
 
@@ -687,7 +705,7 @@ class SubmitCoordinator(
 - [ ] `submit` 除 `CancellationException` 外不抛异常；本地错误不发网络请求
 - [ ] 分页问卷检测（6.5）有单测 fixture
 - [ ] 响应分类器（8.4）用**真实响应**做向量：`7〒需要安全校验，请重新提交！`→E_CAPTCHA、`10〒`→成功、`11〒`→成功（JS 推导）、`22〒`→E_CAPTCHA（JS 推导）、`5〒请输入正确的学号`→E_REJECTED、aliyunwaf→E_CAPTCHA、空正文→E_PARSE、非 〒 且无关键词→E_UNKNOWN
-- [ ] `useAliVerify` 解析（`var useAliVerify=1`→`true`，缺失→`false`）与硬门控单测：`useAliVerify=true` 且 `captchaToken=null` 时 `submit` **零网络请求**返回 `E_CAPTCHA`
+- [ ] **无本地门控单测**：`useAliVerify=true` 且 `captchaToken=null` 时 `submit` **仍发出一次 POST**（假阴性防护）；仅当响应业务码 7/22 才返回 `E_CAPTCHA`
 - [ ] §13 兜底契约：`fetch(url, cookies)` 注入语义、`submit(..., captchaToken)` 分支、`sceneId` 解析（见 §13.10）
 - [ ] 单选/多选/下拉的值解析（7.3）有单测 fixture
 
@@ -710,7 +728,7 @@ class SubmitCoordinator(
 
 ## 13. 验证码兜底流程契约（用户已批准：仅验证码环节用 App 内 WebView）
 
-> 背景：T3.5 实测 6 个问卷中只有 `useAliVerify=1` 的会被强制安全校验；样本问卷正是此类，纯 HTTP 必被业务码 7 拦截。
+> 背景：`useAliVerify=1` 的问卷（如 T3 样本）纯 HTTP 必被业务码 7 拦截，需要人机验证；`useAliVerify=0` 的问卷在 `ktimes≥4`（契约下限 4）且不补发校验类字段时**可纯接口提交**（V6 实测成功，见 §0/§5.3）。**用户已批准**：**仅**「人机验证」这一步交给 App 内 WebView 由用户人工完成；**问卷数据的提交永远由纯 HTTP 接口完成**。
 > **用户已批准**：**仅**「人机验证」这一步交给 App 内 WebView 由用户人工完成；**问卷数据的提交永远由纯 HTTP 接口完成**。
 > 本兜底**不绕过风控**，只是把「人机验证」这一步交还给人。
 
@@ -718,7 +736,7 @@ class SubmitCoordinator(
 
 | 项 | 规定 |
 |---|---|
-| 触发 | `submit` 返回 `errorCode == E_CAPTCHA`（硬门控 `useAliVerify==true`，或响应业务码 7/22） |
+| 触发 | `submit` 返回 `errorCode == E_CAPTCHA`（**仅由响应判定**：业务码 7/22 或响应含 `aliyunwaf`；本地已无门控） |
 | 入口 | **必须用户显式点击**「人工验证后重试」按钮才启动 WebView；**绝不自动打开**。按钮显示条件见 §13.5；点击时针对**第一个「`E_CAPTCHA` 且尚未兜底」的组**（多组需验证时逐组处理，全部处理完按钮隐藏） |
 | 次数 | **每组最多 1 次**（`CAPTCHA_FALLBACK_PER_GROUP = 1`），**不设跨组硬上限**。**消耗判据（normative，Lead 最终口径）**：仅当**验证环节实际启动过**（WebView 成功唤起验证码并进入等待/收割；含「超时未取得令牌」与「取得令牌但提交仍失败」）才计入该组；**用户主动取消不消耗**（用户改主意不是失败，且每次都要亲手点按钮，不存在自动循环）；结构性失败（无 WebView / 页面改版 / 无验证入口）**不消耗但直接终态**——按钮对全部未兜底组立即隐藏。计入后该组不再显示入口，其他组不受影响 |
 | 终态 | 用户不点则保持 `E_CAPTCHA` 终态文案，不提供普通「重试」（重试必然同样被拦） |
@@ -726,7 +744,7 @@ class SubmitCoordinator(
 ### 13.2 时序（括号内为负责层）
 
 1. （engine）纯 HTTP `fetch` → `SurveyModel`（含 `useAliVerify`、`captchaType`、`cookies`、`sceneId`）。
-2. （engine）`submit` 返回 `E_CAPTCHA`（§5.3 第 0 步或 §8.4）。
+2. （engine）`submit` 返回 `E_CAPTCHA`（§8.4 响应分类器；**本地无门控，请求已实际发出**）。
 3. （ui）展示终态卡片 + 「人工验证后重试」按钮。
 4. （ui）用户点击 → 启动 `CaptchaActivity`（WebView），入参 = `model.url` + `model.cookies`。
 5. （ui）按 §13.3 把引擎 cookie 注入 WebView 的 `CookieManager`，再 `loadUrl(model.url)`（真实问卷 URL）。
@@ -750,10 +768,10 @@ WebView 侧：`android.webkit.CookieManager.getInstance()`（全局单例）。
 
 | 方向 | 规则 |
 |---|---|
-| ① 引擎 → WebView（打开验证页之前） | 对 `model.cookies` 每一条执行 `CookieManager.getInstance().setCookie("https://www.wjx.cn/", "k=v")`，全部写完后 `flush()`。**必须逐条**（不要手工拼 `Cookie` 头塞进 `loadUrl`） |
+| ① 引擎 → WebView（打开验证页之前） | **基准 origin = 问卷 URL 的 origin**（`scheme://host[:port]/`，host 统一小写；解析失败兜底 `https://www.wjx.cn/`），由纯函数 `submit/CaptchaHarvest.kt` 的 `CookieHeader.originOf(url, fallback)` 计算；`CaptchaActivity` 用它算出 `cookieBase`，**方向①与方向④共用同一个值**。对 `model.cookies` 每一条执行 `CookieManager.getInstance().setCookie(cookieBase, "k=v")`，全部写完后 `flush()`；**必须逐条**（不要手工拼 `Cookie` 头塞进 `loadUrl`）。**为什么不能写死 `https://www.wjx.cn/`**：cookie 绑在 www 主机上时，`v.wjx.cn` 等**子域验证页收不到引擎会话 cookie** → 方向①失效（用户新样本 `https://v.wjx.cn/vm/P2M09FG.aspx` 正是子域；契约 §5.1 已接受任意子域） |
 | ② WebView → 引擎（收割令牌之后） | `CookieManager.getInstance().getCookie(model.url)` 取回 `"k=v; k2=v2"`，解析成 `Map<String,String>`，作为 `fetch(url, cookies = map)` 的入参；引擎侧把每条注入自己的 `CookieManager.cookieStore`（`path="/"`、`domain=".wjx.cn"`）后再 GET |
 | ③ 引擎侧注入语义 | `fetch(url, cookies)` 的 `cookies` **非空**时：先清空该实例 cookieStore，再逐条注入，再 GET；**空 Map**（默认）= 保持首次 fetch 语义不变（源码级兼容既有调用） |
-| ④ 清理（结束即清） | 兜底流程结束后（成功/失败/取消），把 `wjx.cn` 域下 WebView 的会话 cookie 逐条置空（`setCookie(url, "k=; Max-Age=0")`）+ `flush()`。**不得**调用 `removeAllCookies()`（全局单例，会误伤其他会话）；理由：验证会话是一次性的，留着会破坏「每组独立会话」契约 |
+| ④ 清理（结束即清） | 兜底流程结束后（成功/失败/取消），把 **`cookieBase`（= 方向①的同一个 origin）** 下 WebView 的会话 cookie 逐条置空（`setCookie(cookieBase, "k=; Max-Age=0")`）+ `flush()`。**不得**调用 `removeAllCookies()`（全局单例，会误伤其他会话）；理由：验证会话是一次性的，留着会破坏「每组独立会话」契约 |
 
 **只做单向注入是错的**：只做 ① → 验证令牌来自 WebView 会话、提交来自引擎会话；只做 ② → 验证页看不到引擎的 `acw_tc` 等会话 cookie。两者都会让服务端继续返回业务码 7。
 
@@ -860,12 +878,13 @@ internal const val JS_HARVEST =
 - [ ] `fetch(url, cookies = emptyMap())`：空 Map 行为与旧版完全一致；非空 Map 时清空并注入后再 GET
 - [ ] `submit(m, answers, captchaToken = null)`：`captchaToken` 非空 → 跳过第 0 步门控，body 带 `captchaVerifyParam`+`sceneId`；为空 → 绝不携带这两个字段
 - [ ] `SurveyModel.sceneId` 解析（缺失 → `null`）；令牌非空且 `sceneId` 非空 → body 带 `sceneId`；`sceneId` 缺省 → body **不含** `sceneId` 字段（不本地拦截）
-- [ ] 单测：`useAliVerify=true` + `captchaToken=null` → 零网络请求 `E_CAPTCHA`；`useAliVerify=true` + `captchaToken="x"` → 发出 POST 且 body 含令牌
+- [ ] 单测：无论 `useAliVerify` 与 `captchaToken` 取值，`submit` 都**发出一次 POST**（无本地门控）；`captchaToken` 非空时 body 含 `captchaVerifyParam`（及非空时的 `sceneId`）
 
 **T5（android-dev）**
 - [ ] `CaptchaActivity`：§13.2 时序、§13.3 双向 cookie、§13.5 降级表、§13.7 两个脚本常量逐字
 - [ ] 代码审查：`ui/` 的 `evaluateJavascript` 调用点 1 个且只接受 2 个固定常量、无动态拼接、无 `@JavascriptInterface` 传数据、无点击提交入口
 - [ ] 兜底按钮出现/隐藏严格按 `errorCode + captchaRetriedGroups`（每组 1 次；**取消不消耗**，超时/失败消耗），点击针对第一个未兜底组，不用文案匹配
+- [ ] Cookie 注入/清理基准 = **问卷 URL 的 origin**（`CookieHeader.originOf`，含子域如 `v.wjx.cn`；方向①与④同源），**不得写死 `https://www.wjx.cn/`**
 
 **T6（qa-build）**
 - [ ] 用 fake client/submitter 跑通 §13.2 第 10–12 步的编排（含：每组最多 1 次、**取消不消耗而超时/失败消耗**、多组逐组处理、结构性失败按钮立即隐藏、该组用完后不再给入口）
@@ -885,3 +904,6 @@ internal const val JS_HARVEST =
 | 2026-09-22 | **Lead 裁决（分类器）**：`<业务码>〒<文案>` 先解析业务码——`10`=成功、`7`=E_CAPTCHA（终态）、其他数字=E_REJECTED、解析不出才退回关键词启发式、最后 E_UNKNOWN；§8.1/§8.2/§8.4/§12 更新，并加入真实响应测试向量 | Lead |
 | 2026-09-22 | **Lead 改判 + T3.5 证据**：`SurveyModel` 增 additive `useAliVerify: Boolean = false`；E_CAPTCHA 门控由 `captchaType` 改为 `useAliVerify`（6/6 问卷 captchaType='2'，用它判死全部问卷）；`11`→成功、`22`→E_CAPTCHA 并标注来源等级；新增 §11.3 证据表 | Lead / api-debug（证据）/ architect（落文） |
 | 2026-09-22 | **T9 新增 §13 验证码兜底契约**（用户已批准仅验证码环节用 App 内 WebView）：§13.1 触发/入口、§13.2 12 步时序、§13.3 Cookie 双向注入、§13.4 硬边界（绝不把数据交给页面提交）、§13.5 降级表、§13.6 additive 签名（fetch/submit）+ `sceneId` 提案、§13.7 注入脚本常量、§13.8 WebView 安全配置、§13.9 端到端验证价值、§13.10 DoD | 用户批准 / Lead 指派 / architect 落文 |
+| 2026-09-22 | **Lead 改判（两条）**：① **取消 `useAliVerify` 本地门控**，改为「总是先尝试提交，只有响应 7/22 才走兜底」（避免假阴性）；② `&ktimes` 下限取**已验证值 4**（`max(4,·)`），并更正影响说明：0/1/2/3→4 会改变 XOR key（1→4）→ **`jqsign` 随之改变**，URL 与签名必须同源。§5.3/§6.4/§8.2/§11.1/§11.2/§11.3/§12/§13.1/§13.2/§13.10 同步 | Lead / architect |
+| 2026-09-22 | **§13.3 Cookie 基准改为问卷 URL 的 origin**（`CookieHeader.originOf(url, fallback)`；方向①注入与④清理同源），修复写死 `https://www.wjx.cn/` 导致 `v.wjx.cn` 子域验证页收不到会话 cookie 的缺陷；§13.10 T5 加静态检查项 | android-dev（证据）/ Lead（批准）/ architect |
+| 2026-09-22 | §0 补用户佐证（微信扫码填写未弹人机验证）；§5.3 第 5 步补 V3/V4/V5 实测（补发校验字段会把 10 推向 7 → 最小请求形态才是正确形态） | Lead / api-debug / architect |

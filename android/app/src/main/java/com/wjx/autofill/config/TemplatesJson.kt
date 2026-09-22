@@ -15,9 +15,9 @@ object TemplatesJson {
 
     const val SCHEMA_VERSION = 1
 
-    /** 契约 §5.1：^https://(www\.)?wjx\.cn/(vm|jq|m)/([A-Za-z0-9]{4,32})\.aspx */
+    /** surveyUrl 正则：^https://([A-Za-z0-9-]+\.)*wjx\.cn/(vm|jq|m)/([A-Za-z0-9]{4,32})\.aspx（允许 wjx.cn 的任意子域，忽略大小写） */
     private val SURVEY_URL_REGEX =
-        Regex("""^https://(www\.)?wjx\.cn/(vm|jq|m)/([A-Za-z0-9]{4,32}).aspx""")
+        Regex("""^https://([A-Za-z0-9-]+\.)*wjx\.cn/(vm|jq|m)/([A-Za-z0-9]{4,32})\.aspx""", RegexOption.IGNORE_CASE)
 
     private val SHORT_ID_REGEX = Regex("""^[A-Za-z0-9]{4,32}$""")
 

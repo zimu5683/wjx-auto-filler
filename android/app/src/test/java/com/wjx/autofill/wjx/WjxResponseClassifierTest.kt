@@ -124,4 +124,44 @@ class WjxResponseClassifierTest {
         val result = WjxResponseClassifier.classify(200, body)
         assertEquals(WjxResponseClassifier.RAW_LIMIT, result.raw!!.length)
     }
+
+    @Test
+    fun bareBusinessCodeTwentyTwoIsCaptcha() {
+        // T11 实测：ktimes=0 的真实响应就是**裸码 22**（无 〒 无文案）→ 分类器必须先判 ^\d{1,3}$ 裸码，再走 〒 分割
+        val result = WjxResponseClassifier.classify(200, "22")
+        assertEquals(false, result.ok)
+        assertEquals(SubmitErrorCode.CAPTCHA, result.errorCode)
+        assertEquals("raw 必须保留原文", "22", result.raw)
+    }
+
+    @Test
+    fun bareBusinessCodeSevenIsCaptchaToo() {
+        // 7 与 22 同义：都是验证码终态
+        val result = WjxResponseClassifier.classify(200, "7")
+        assertEquals(false, result.ok)
+        assertEquals(SubmitErrorCode.CAPTCHA, result.errorCode)
+        assertEquals("7", result.raw)
+    }
+
+    @Test
+    fun businessCodeElevenWithCompletionUrlIsSuccess() {
+        // 构造用例（页面 JS afterSubmit 的 11 分支）：第二段是完成页跳转 URL
+        val body = "11〒https://www.wjx.cn/wjx/join/completemobile2.aspx?activityid=P2M09FG&joinid=127844297308"
+        val result = WjxResponseClassifier.classify(200, body)
+        assertEquals(true, result.ok)
+        assertNull(result.errorCode)
+        assertEquals("提交成功", result.message)
+    }
+
+    @Test
+    fun realSuccessResponseWithCompletionUrlIsSuccess() {
+        // V6 真实成功响应（api-debug 实测，ktimes>0）：10〒 + 完成页 URL
+        val body = "10〒/wjx/join/complete.aspx?activityid=P2M09FG&joinid=127844297308&sojumpindex=1&comsign=B1CA04F4DA75182824F45478C7B42CDAF5DA2878"
+        val result = WjxResponseClassifier.classify(200, body)
+        assertEquals(true, result.ok)
+        assertNull(result.errorCode)
+        assertEquals("提交成功", result.message)
+        assertEquals(body, result.raw)
+    }
+
 }

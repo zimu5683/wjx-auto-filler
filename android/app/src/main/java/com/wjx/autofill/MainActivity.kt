@@ -35,6 +35,7 @@ import com.wjx.autofill.submit.BatchReport
 import com.wjx.autofill.submit.CAPTCHA_TOKEN_TTL_MS
 import com.wjx.autofill.submit.CaptchaHarvest
 import com.wjx.autofill.submit.SubmitCoordinator
+import com.wjx.autofill.submit.pendingCaptchaGroups
 import com.wjx.autofill.ui.CaptchaActivity
 import com.wjx.autofill.ui.EditorState
 import com.wjx.autofill.ui.PairAdapter
@@ -326,11 +327,10 @@ class MainActivity : AppCompatActivity() {
         if (state.submitting) resultAdapter.clear() else resultAdapter.submit(state.outcomes)
 
         // 兜底按钮显示/隐藏**只看 errorCode + 每组尝试记录**，禁止文案匹配（§13.5）。
-        val hasRetryableCaptcha = state.outcomes.any {
-            it.result.errorCode == SubmitErrorCode.CAPTCHA && !captchaRetriedGroups.contains(it.index)
-        }
+        // 判据是纯函数 pendingCaptchaGroups（submit/ 包），可被 JVM 单测直接覆盖。
+        val pendingCaptcha = state.outcomes.pendingCaptchaGroups(captchaRetriedGroups)
         binding.captchaFallbackButton.visibility =
-            if (hasRetryableCaptcha && !captchaFallbackDisabled && !state.submitting) {
+            if (pendingCaptcha.isNotEmpty() && !captchaFallbackDisabled && !state.submitting) {
                 View.VISIBLE
             } else {
                 View.GONE
@@ -804,18 +804,16 @@ class MainActivity : AppCompatActivity() {
      */
     private fun startCaptchaFallback() {
         val template = lastSubmittedTemplate ?: return
-        val candidates = state.outcomes.filter { it.result.errorCode == SubmitErrorCode.CAPTCHA }
-        if (candidates.isEmpty()) return
         // 取第一个**还没用过机会**的组：多组都需要验证时，逐组各给一次入口。
-        val outcome = candidates.firstOrNull { !captchaRetriedGroups.contains(it.index) }
-        if (outcome == null) {
+        val index = state.outcomes.pendingCaptchaGroups(captchaRetriedGroups).firstOrNull()
+        if (index == null) {
             // 状态不同步时的守卫：所有需要兜底的组都已用过机会（正常路径按钮已隐藏）。
             toast(R.string.captcha_exhausted)
             return
         }
-        pendingCaptchaGroup = outcome.index
+        pendingCaptchaGroup = index
         // §13.3 方向①：优先注入该组引擎会话 cookie；拿不到就退回解析时的会话。
-        pendingCaptchaCookies = coordinator.lastSessionCookies(outcome.index)
+        pendingCaptchaCookies = coordinator.lastSessionCookies(index)
             .ifEmpty { state.survey?.cookies.orEmpty() }
         captchaLauncher.launch(
             CaptchaActivity.intent(this, template.surveyUrl, pendingCaptchaCookies),

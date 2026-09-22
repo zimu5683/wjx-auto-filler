@@ -101,14 +101,12 @@ fun main(args: Array<String>) {
         println(URLDecoder.decode(body, "UTF-8"))
 
         println()
-        println("== 6. 提交门（本地判定）==")
+        println("== 6. 提交行为（本地门控已取消，Lead 2026-09-22 裁定）==")
         println("最终将写入 body 的 sceneId：" + (m.sceneId?.takeIf { it.isNotBlank() } ?: "<不携带>") +
             "（来源 " + sceneSource + "；captchaToken 为空时 body 不含该字段）")
-        if (m.useAliVerify) {
-            println("useAliVerify=1 → 引擎会**本地直接返回 E_CAPTCHA**，不发送网络请求（纯接口无法提交该问卷）")
-        } else {
-            println("useAliVerify=0 → 引擎会真的发送上面的 POST")
-        }
+        println("ktimes 发送值 = max(4, 页面值)（T11 实测：0 触发服务端裸码 22 风控判定；4 拿到成功码 10）")
+        println("useAliVerify=" + m.useAliVerify + " → 无论取值，引擎都会**真的发送上面的 POST**；")
+        println("  只有服务端回业务码 7/22 时，分类器才判 E_CAPTCHA（再由 UI 走兜底路径）。")
 
         if (!doSubmit) {
             println()
