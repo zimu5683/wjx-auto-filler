@@ -145,3 +145,20 @@ qa-build 产出 dist/wjx-autofill-1.0.0-universal.apk（6,138,222 B）+ .sha256 
 
 **归档要点**：v1.0.3 的 tag 与资产**保持不动**（已发布 tag 不移动）；其 CI 红是**已知事实**，
 原因就是上述 lint Error，不是其他事故；v1.0.4 修复后 CI 应恢复绿色。
+
+## 2026-09-22 15:20–16:20　第五阶段：v1.0.5（用户真机实测三项修改）
+
+| 时间 | 动作 | 证据 | 结果 |
+| --- | --- | --- | --- |
+| 15:20 | 接 task-25（T26 发布 v1.0.5） | 板上 task-21/22/23 进行中、task-24/25 pending | 先做文档阶段，不空等 |
+| 15:27 | 观察变更落地 | `captcha_banner` 在 strings.xml 的计数 6 → **0**（横幅已移除） | 继续等 UI 定稿 |
+| 15:48 | UI/引擎定稿 | 新增 `action_delete_template`「删除模板」、`dialog_delete_template_message`、`toast_template_deleted`、`result_skipped_fields`「已跳过 %1$d 个未匹配字段：%2$s…」；移除 import/export 与 banner；引擎 `SurveyModel.skippedFields` + 契约 §7.2/§7.4 | 文档逐字对齐，不臆造 |
+| 15:50 | 文档三处更新 | commit `7f5280a`（移除导入/导出 + 删除模板 + 超量预填 + 去横幅）、`82ea3e6`（错误表区分「已跳过」与「仍失败」） | grep 复核无残留（仅保留说明变更本身的句子） |
+| 16:01 | v1.0.5 出包 + 六项独立复验 | sha256 `7cbb7982…`；**六版签名同源**；4 ABI×2 .so；badging 1.0.5/10005；**448 单测 0 失败**；lintRelease **0 Error**；APK 资源 `captcha_banner` 计数 **0** | 全部通过 |
+| 16:04 | 板子阻塞 → 上报 | task-24 仍 pending → task-25 `claim` 被拒 | Lead 代结 task-24（沿用前几轮的处置方式） |
+| 16:06 | claim → 发布 v1.0.5 | commit `1b49790`（`git add -A` 带上全部未提交项，避免重演 v1.0.3 的 HEAD/APK 不一致）；push main + tag `v1.0.5`；`gh release create … --verify-tag` | https://github.com/zimu5683/wjx-auto-filler/releases/tag/v1.0.5 |
+| 16:08 | 四项校验 | 匿名 `releases/latest` + apksigner 六版对比 | latest=v1.0.5；两条 URL 非空；APK digest = `sha256:7cbb7982…` **与本地冻结一致**；六版证书 SHA-256 全为 `edcce56e…` |
+| 16:20 | CI | `gh run view 35702893194` | **completed / success** |
+
+**交付序列**：v1.0.0（更新链路起点）→ v1.0.1 → v1.0.2 → v1.0.3（历史，CI 红已知且已归档）→ v1.0.4 → **v1.0.5（当前最终）**；
+六版共用同一把 release 签名（`edcce56e…`），应用内更新与覆盖安装链路完整。
