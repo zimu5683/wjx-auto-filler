@@ -349,3 +349,25 @@ Lead 2026-09-22 裁定**取消 useAliVerify 本地门控**。现行口径：
 
 - 我的独立预检脚本一度因「编译器 classpath 缺 kotlinx-coroutines」报假失败（harness 问题，非工程问题），已由随后的 Gradle 全量验证取代。
 - 已提醒 delivery：push 前带上未提交的 MainActivity/EditorState/ResultAdapter/wjx/config/res 改动，避免 HEAD 与 APK 不一致。
+## 2026-09-22 16:30–17:00 T29 构建 v1.0.6
+
+### 测试（新增 17 用例/变体，总数 448 → 482）
+
+- **ScheduleTimeTest（7）**：`applyParsedOpenTime(current, parsed)` —— parsed>0 强制覆盖；null/0/负数保留 current；两边都空返回 null；format/parse 往返；非法输入拒绝；trim。
+  · 自我纠错：我最初断言 format(1790127180000)=="2026-09-23 09:33"，实测 JVM 默认时区为 UTC（shell 显示 +08:00）→ 改为只断言往返一致 + 格式正则。ScheduleTime 用设备默认时区；固定北京时间格式化属 WjxTimeAdapter（另有单测）。
+- **EditorStateTest（10）**：映射列表数据层（一次加 8 条全保留、清空、删中间行保序、groupIndex 越界按需建组、组名兜底）+ 模板按名字保存/删除/查找。
+  · EditorState 仅 saveTo/restoreFrom 依赖 Bundle，纯方法可在 JVM 单测跑（standalone 用 android.jar 验证）。
+- 独立 kotlinc 全量：**21 个测试类 / 236 用例 OK**（不含需 android.jar 的 QrDecodeTest）。
+
+### 构建：ALL PASS（PASS 18 / FAIL 0 / WARN 0）
+
+- 命令：`./gradlew --stop && ./gradlew test lintRelease assembleRelease`（同一轮，8m2s）→ `bash scripts/build-apk.sh --skip-build`。
+- 产物：`dist/wjx-autofill-1.0.6-universal.apk`（6175666 B），sha256 `6b5672a118dc8cff6e119c2af0222c1f0ddd9c3bf95ded1b45458d132d4fcf8b`。
+- apksigner：CN=WJX AutoFill，SHA-256 `edcce56ef5d150cc7597223ddb4380bbce328756abb4a8bd13ffbda87c708372`（与 1.0.0–1.0.5 同一把密钥）。
+- badging：1.0.6 (10006)、minSdk 24、targetSdk 35、四 ABI；无 GMS；无自研 native。
+- 单元测试 **482 用例 0 失败 0 错误**（debug/release 各 241）；**lintRelease 0 条 Error**（16:52:45）；构建后 15 分钟内 main 源码 0 改动。
+
+### 报告增强（按 Lead 裁定）
+
+- 「需真机人工验证」第 5 条：加 8 条字段映射应全部可见/可编辑/页面可滚/无内嵌滚动条；并注明「映射行本轮无 JVM 覆盖，PairAdapter 依赖 android.view 且问题属真实布局测量，Robolectric 测不到，故不引入」。
+- 新增「本版关键修复（v1.0.6，人工维护）」小节：① 映射列表 4 行不可滚（ScrollView 内嵌 RecyclerView 不重测）② SurveyStatus.fromModel() parsed=null 导致顶部状态条从未显示已开放/未开放 ③ 匹配规则可跳过 vs 仍失败（v1.0.5 起）。
