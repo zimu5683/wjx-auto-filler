@@ -47,7 +47,15 @@ fun main(args: Array<String>) {
         val fetched = client.fetch(url)
         val fetchMs = System.currentTimeMillis() - t0
         if (fetched.isFailure) {
-            println("FETCH FAILED after " + fetchMs + "ms: " + fetched.exceptionOrNull())
+            val err = fetched.exceptionOrNull()
+            println("== 1. 抓取与解析失败 ==")
+            println("耗时 " + fetchMs + "ms")
+            if (err is com.wjx.autofill.wjx.WjxException) {
+                println("errorCode=" + err.code)
+                println("message=" + err.message)
+            } else {
+                println("exception=" + err)
+            }
             return@runBlocking
         }
         val m: SurveyModel = fetched.getOrThrow()
@@ -63,6 +71,7 @@ fun main(args: Array<String>) {
         println("useAliVerify=" + m.useAliVerify + "   captchaType=" + m.captchaType)
         println("sceneId=" + m.sceneId + "   来源=" + sceneSource)
         println("jqnonce=" + m.jqnonce + "   ktimes=" + m.ktimes + "   startTime=" + m.startTime)
+        println("openAtMillis=" + m.openAtMillis + "   needsCaptchaHint=" + m.needsCaptchaHint)
         println("submitUrl=" + m.submitUrl)
         println("cookies=" + m.cookies.keys)
         println("题目 " + m.questions.size + " 道：")

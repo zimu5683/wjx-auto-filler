@@ -241,3 +241,29 @@ Lead 2026-09-22 裁定**取消 useAliVerify 本地门控**。现行口径：
 - 产物：dist/wjx-autofill-1.0.2-universal.apk + .sha256 + VERIFY-REPORT.md（delivery 已独立复验四项通过，正在发 Release v1.0.2）。
 - 测试：Gradle 314 用例全过；独立 kotlinc 侧 152 用例 + QrDecodeTest 5 用例亦全过。
 - task-12 已由 Lead 结项；后续只剩 delivery 的 task-14。
+## 2026-09-22 10:00–10:30 T19（task-18）新功能测试
+
+### 新增测试文件（android/app/src/test/**）
+
+| 文件 | 覆盖 |
+|---|---|
+| wjx/WjxTimeAdapterTest.kt | BeginDate 时间戳（13 位毫秒 / 10 位秒×1000）、单双引号与空格、文案兜底（含全角冒号与单位数小时）、缺失/非法/0 → Unknown、合理性守卫（早于 2000 或晚于 now+20 年 → Unknown）、已开放也必须返回 Known、Unknown 不拦截、isOpen 等号边界、+08:00 换算（2026-09-23 09:33 == 1790127180000） |
+| wjx/WjxPageOpenTimeTest.kt | E_NOT_OPEN 合成 HTML：未来 BeginDate → 抛 WjxException(NOT_OPEN) 且文案含北京时间；过去/缺失/0 → 正常解析；纯文案页也能触发；**未开放优先于 E_PARSE**（空题目页不误报改版）。needsCaptchaHint：useAliVerify=1 → true；**标记存在但值为 0 → false**；缺失 → false |
+| schedule/ScheduledTaskStoreTest.kt | FileScheduledTaskStore 往返（含全部 TaskState）、clear、原子写无 .tmp、坏 JSON → 备份 schedule.json.bad-* 且保留原文、缺 templateId/openAt<=0 → null、未知 state → ARMED、leadMinutes 载入 clamp；ScheduleMath.remindAtMillis（0/正常/超长 clamp）、normalizeLeadMinutes（0/正常/1440/1441→1440/**负值→0**）、stateAfterRun；ScheduleTime 往返 |
+
+### 发现并修掉的问题
+
+1. **真实偏差（已报 android-dev 并修复）**：ScheduleMath.normalizeLeadMinutes 负值原本返回默认 10，冻结口径是 0 → 已改为 MIN_LEAD_MINUTES。
+2. 我自己的用例最初传 now=0，被适配器的合理性守卫（now+20 年）判为脏数据 → 改为注入基准 now=1790127180000。
+3. 2099 年的合成文案超出 now+20 年守卫 → 改为 2030。
+4. 删掉 useAliVerify=2 的边际断言（真实页面只有 0/1，避免过度约束；口径分歧已同步 android-dev/Lead）。
+
+### 验证结果
+
+- 独立 kotlinc + JUnit：**全量 17 个测试类 / 192 用例 OK**（含 T19 新增 40 用例，不含需 android.jar 的 QrDecodeTest）。
+- build-apk.sh 报告新增固定小节「## 需真机人工验证（JVM 单测覆盖不到）」：前台服务与通知（含全屏 Intent 响铃震动）、WebView 兜底交互、相机扫码/相册解码、应用内更新安装。
+
+### 阻塞
+
+- android-dev 正在做自动进入验证页 + PendingCaptchaStore + Notifier/Manifest 变更，明确要求等他完成通知后再跑 Gradle 全量（避免编译中间态）。
+- 待其通知后：`./gradlew --stop && ./gradlew test` → `scripts/build-apk.sh --quick` 出 1.0.3。

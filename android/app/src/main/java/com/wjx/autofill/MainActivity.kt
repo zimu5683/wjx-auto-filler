@@ -2,7 +2,9 @@ package com.wjx.autofill
 
 import android.content.ActivityNotFoundException
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.view.View
 import android.widget.AdapterView
@@ -13,6 +15,7 @@ import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
@@ -31,8 +34,20 @@ import com.wjx.autofill.qr.LinkCheck
 import com.wjx.autofill.qr.QrDecoder
 import com.wjx.autofill.qr.QrScanActivity
 import com.wjx.autofill.qr.SurveyLinkValidator
+import com.wjx.autofill.schedule.FileScheduledTaskStore
+import com.wjx.autofill.schedule.Notifier
+import com.wjx.autofill.schedule.PendingCaptchaStore
+import com.wjx.autofill.schedule.SchedulePrefs
+import com.wjx.autofill.schedule.ScheduleMath
+import com.wjx.autofill.schedule.ScheduleTime
+import com.wjx.autofill.schedule.ScheduledRunner
+import com.wjx.autofill.schedule.ScheduledSubmitService
+import com.wjx.autofill.schedule.ScheduledTask
+import com.wjx.autofill.schedule.ScheduledTaskStore
+import com.wjx.autofill.schedule.TaskState
 import com.wjx.autofill.submit.BatchReport
 import com.wjx.autofill.submit.CAPTCHA_TOKEN_TTL_MS
+import com.wjx.autofill.submit.GroupOutcome
 import com.wjx.autofill.submit.CaptchaHarvest
 import com.wjx.autofill.submit.SubmitCoordinator
 import com.wjx.autofill.submit.pendingCaptchaGroups
@@ -41,16 +56,20 @@ import com.wjx.autofill.ui.EditorState
 import com.wjx.autofill.ui.PairAdapter
 import com.wjx.autofill.ui.QuestionAdapter
 import com.wjx.autofill.ui.SubmitResultAdapter
+import com.wjx.autofill.ui.SurveyOpenState
+import com.wjx.autofill.ui.SurveyStatus
 import com.wjx.autofill.update.AppUpdater
 import com.wjx.autofill.update.UpdateChecker
 import com.wjx.autofill.update.UpdateEvent
 import com.wjx.autofill.update.UpdateInfo
 import com.wjx.autofill.wjx.HttpWjxSurveyClient
 import com.wjx.autofill.wjx.SubmitErrorCode
+import com.wjx.autofill.wjx.SubmitResult
 import com.wjx.autofill.wjx.SurveyModel
 import com.wjx.autofill.wjx.WjxException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -90,6 +109,22 @@ class MainActivity : AppCompatActivity() {
     private var pendingCaptchaGroup = -1
     private var pendingCaptchaCookies: Map<String, String> = emptyMap()
 
+    // ---- 定时自动提交（前台常驻服务；同一时刻只允许 1 个任务） ----
+    private lateinit var scheduleStore: ScheduledTaskStore
+    private lateinit var schedulePrefs: SchedulePrefs
+    private var scheduleTask: ScheduledTask? = null
+    private var suppressScheduleToggle = false
+    private var scheduleFallbackJob: Job? = null
+
+    /** 最近一次并行提交是否被服务端要求人机验证（横幅用）。 */
+    private var lastSubmitHadCaptcha = false
+
+    /**
+     * 已**自动进入过**验证页但没真正发起验证（用户返回/未唤起）的组：
+     * 不消耗该组机会，但禁止自动再次进入，避免「返回→自动进入」死循环。
+     */
+    private val captchaAutoEnterBlocked = mutableSetOf<Int>()
+
     private val scanLauncher =
         registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
             if (result.resultCode != RESULT_OK) return@registerForActivityResult
@@ -112,6 +147,11 @@ class MainActivity : AppCompatActivity() {
             if (uri != null) readImportFile(uri)
         }
 
+    private val notificationPermissionLauncher =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+            if (!granted) toast(R.string.schedule_need_notification_permission)
+        }
+
     private val captchaLauncher =
         registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
             val reason = result.data?.getStringExtra(CaptchaActivity.EXTRA_ERROR).orEmpty()
@@ -127,6 +167,10 @@ class MainActivity : AppCompatActivity() {
                     captchaFallbackDisabled = true
                 } else if (started && !cancelled && group >= 0) {
                     captchaRetriedGroups += group
+                } else if (group >= 0) {
+                    // 变更 1 防循环：没真正发起验证（取消/未唤起）→ 不消耗机会，
+                    // 但禁止自动再次进入；「人工验证后重试」按钮仍保留为手动入口。
+                    captchaAutoEnterBlocked += group
                 }
                 toast(reason.ifBlank { getString(R.string.captcha_cancelled) })
                 state.resultVisible = true
@@ -163,6 +207,9 @@ class MainActivity : AppCompatActivity() {
         applyWindowInsets()
 
         store = TemplateStore(filesDir)
+        scheduleStore = FileScheduledTaskStore(filesDir)
+        schedulePrefs = SchedulePrefs(this)
+        scheduleTask = scheduleStore.load()
         state = EditorState.restoreFrom(savedInstanceState)
 
         binding.versionLabel.text = getString(R.string.label_version, BuildConfig.VERSION_NAME)
@@ -171,7 +218,10 @@ class MainActivity : AppCompatActivity() {
         setupActions()
         renderAll()
 
-        if (savedInstanceState == null) checkUpdateSilently()
+        if (savedInstanceState == null) {
+            checkUpdateSilently()
+            resumePendingCaptchaIfAny()
+        }
     }
 
     override fun onSaveInstanceState(outState: Bundle) {
@@ -268,6 +318,21 @@ class MainActivity : AppCompatActivity() {
 
         binding.submitButton.setOnClickListener { submitAll() }
         binding.captchaFallbackButton.setOnClickListener { startCaptchaFallback() }
+        binding.captchaBannerAction.setOnClickListener { startCaptchaFallback() }
+        binding.scheduleSwitch.setOnCheckedChangeListener { _, checked ->
+            if (!suppressScheduleToggle) onScheduleToggled(checked)
+        }
+        // 响铃/震动：用户可选项（默认开）。偏好独立于任务存在，任务创建前后改都生效。
+        binding.alertSoundSwitch.isChecked = schedulePrefs.alertSound
+        binding.alertVibrateSwitch.isChecked = schedulePrefs.alertVibrate
+        binding.alertSoundSwitch.setOnCheckedChangeListener { _, checked ->
+            schedulePrefs.alertSound = checked
+            renderSchedule()
+        }
+        binding.alertVibrateSwitch.setOnCheckedChangeListener { _, checked ->
+            schedulePrefs.alertVibrate = checked
+            renderSchedule()
+        }
         binding.closeResultsButton.setOnClickListener {
             state.resultVisible = false
             renderResults()
@@ -284,6 +349,86 @@ class MainActivity : AppCompatActivity() {
         pairAdapter.submit(state.group().pairs)
         renderPairList()
         renderResults()
+        renderSurveyStatus()
+        renderCaptchaBanner()
+        renderSchedule()
+        renderSubmitButton()
+    }
+
+    // ------------------------------------------------------------------ 状态条 / 横幅 / 定时
+
+    /** 当前问卷开放状态：优先页面解析值（T16 接线点），其次用户在定时任务里填的开放时间。 */
+    private fun currentSurveyStatus(): SurveyStatus = SurveyStatus.fromModel(
+        model = state.survey,
+        scheduledOpenAtMillis = scheduleTask?.openAtMillis,
+        now = System.currentTimeMillis(),
+    )
+
+    private fun renderSurveyStatus() {
+        val status = currentSurveyStatus()
+        binding.surveyStatusBar.text = when (status.state) {
+            SurveyOpenState.UNKNOWN -> getString(R.string.survey_status_unknown)
+            SurveyOpenState.NOT_OPEN -> getString(
+                R.string.survey_status_not_open,
+                ScheduleTime.format(status.openAtMillis ?: 0L),
+            )
+            SurveyOpenState.OPEN -> getString(R.string.survey_status_open)
+        }
+    }
+
+    /**
+     * 人机验证横幅：**检测到必提示**；未检测到也如实说明「不等于服务端一定放行」。
+     * 不做任何预检提交（用户已决策），只用页面声明 + 提交后的真实结果。
+     */
+    private fun renderCaptchaBanner() {
+        val detected = state.survey?.useAliVerify == true
+        val visible = detected || lastSubmitHadCaptcha || state.survey != null
+        binding.captchaBanner.visibility = if (visible) View.VISIBLE else View.GONE
+        binding.captchaBannerBody.text = when {
+            lastSubmitHadCaptcha -> getString(R.string.captcha_banner_server)
+            detected -> getString(R.string.captcha_banner_detected)
+            else -> getString(R.string.captcha_banner_clear)
+        }
+    }
+
+    private fun renderSubmitButton() {
+        val closed = currentSurveyStatus().state == SurveyOpenState.NOT_OPEN
+        binding.submitButton.alpha = if (closed) 0.5f else 1f
+        binding.submitButton.text = if (closed) {
+            getString(R.string.submit_closed_label)
+        } else {
+            getString(R.string.action_submit)
+        }
+    }
+
+    private fun renderSchedule() {
+        val task = scheduleTask
+        suppressScheduleToggle = true
+        binding.scheduleSwitch.isChecked = task != null
+        suppressScheduleToggle = false
+        if (task != null) {
+            binding.openAtInput.setText(ScheduleTime.format(task.openAtMillis))
+            binding.leadMinutesInput.setText(task.leadMinutes.toString())
+            binding.scheduleStatus.text = getString(
+                R.string.schedule_status_line,
+                scheduleStateLabel(task.state),
+                ScheduleTime.format(task.openAtMillis),
+            )
+        } else {
+            if (binding.leadMinutesInput.text.isNullOrBlank()) {
+                binding.leadMinutesInput.setText(ScheduleMath.DEFAULT_LEAD_MINUTES.toString())
+            }
+            binding.scheduleStatus.text = getString(R.string.schedule_status_none)
+        }
+    }
+
+    private fun scheduleStateLabel(state: TaskState): String = when (state) {
+        TaskState.ARMED -> getString(R.string.schedule_state_armed)
+        TaskState.REMINDED -> getString(R.string.schedule_state_reminded)
+        TaskState.RUNNING -> getString(R.string.schedule_state_running)
+        TaskState.DONE_OK -> getString(R.string.schedule_state_done_ok)
+        TaskState.DONE_FAIL -> getString(R.string.schedule_state_done_fail)
+        TaskState.CANCELLED -> getString(R.string.schedule_state_cancelled)
     }
 
     private fun renderLink() {
@@ -742,8 +887,29 @@ class MainActivity : AppCompatActivity() {
             return
         }
 
+        // 未开放时按钮置灰，但**手动路径仍可用**：确认后照样提交（服务端可能拒绝）。
+        val status = currentSurveyStatus()
+        if (status.state == SurveyOpenState.NOT_OPEN) {
+            AlertDialog.Builder(this)
+                .setTitle(R.string.submit_closed_confirm_title)
+                .setMessage(
+                    getString(
+                        R.string.submit_closed_confirm_message,
+                        ScheduleTime.format(status.openAtMillis ?: 0L),
+                    ),
+                )
+                .setPositiveButton(R.string.submit_closed_confirm_ok) { _, _ -> doSubmit(template) }
+                .setNegativeButton(R.string.action_cancel, null)
+                .show()
+            return
+        }
+        doSubmit(template)
+    }
+
+    private fun doSubmit(template: com.wjx.autofill.config.MappingTemplate) {
         lastSubmittedTemplate = template
         captchaRetriedGroups.clear()
+        captchaAutoEnterBlocked.clear()
         captchaFallbackDisabled = false
         pendingCaptchaGroup = -1
         state.submitting = true
@@ -762,8 +928,14 @@ class MainActivity : AppCompatActivity() {
                 state.outcomes = report.outcomes
                 state.summary = report.summary()
                 state.submitting = false
+                lastSubmitHadCaptcha = report.outcomes.any {
+                    it.result.errorCode == SubmitErrorCode.CAPTCHA
+                }
                 renderResults()
+                renderCaptchaBanner()
                 highlightUnmatched(report)
+                // 变更 1：收到 E_CAPTCHA **直接进入验证界面**，不再要求先点按钮。
+                autoEnterCaptchaIfNeeded()
             } catch (throwable: Throwable) {
                 state.submitting = false
                 state.summary = getString(R.string.submit_failed, throwable.message.orEmpty())
@@ -804,6 +976,7 @@ class MainActivity : AppCompatActivity() {
      */
     private fun startCaptchaFallback() {
         val template = lastSubmittedTemplate ?: return
+        if (captchaFallbackDisabled) return
         // 取第一个**还没用过机会**的组：多组都需要验证时，逐组各给一次入口。
         val index = state.outcomes.pendingCaptchaGroups(captchaRetriedGroups).firstOrNull()
         if (index == null) {
@@ -811,13 +984,69 @@ class MainActivity : AppCompatActivity() {
             toast(R.string.captcha_exhausted)
             return
         }
+        launchCaptchaFor(index)
+    }
+
+    /**
+     * 变更 1（用户要求）：收到 E_CAPTCHA **直接进入验证界面**，不再要求用户先点按钮。
+     *
+     * 保留「人工验证后重试」按钮作为**重试入口**；已兜底组、以及「自动进入过但没真正发起
+     * 验证（用户返回）」的组都不会再次自动进入 —— 避免「返回 → 自动进入」死循环。
+     */
+    private fun autoEnterCaptchaIfNeeded() {
+        if (captchaFallbackDisabled) return
+        val index = state.outcomes.pendingCaptchaGroups(captchaRetriedGroups)
+            .firstOrNull { !captchaAutoEnterBlocked.contains(it) } ?: return
+        launchCaptchaFor(index)
+    }
+
+    private fun launchCaptchaFor(index: Int) {
+        val template = lastSubmittedTemplate ?: return
         pendingCaptchaGroup = index
-        // §13.3 方向①：优先注入该组引擎会话 cookie；拿不到就退回解析时的会话。
+        // §13.3 方向①：优先注入该组引擎会话 cookie；其次用落盘的现场；最后退回解析时的会话。
         pendingCaptchaCookies = coordinator.lastSessionCookies(index)
+            .ifEmpty { pendingCaptchaCookies }
             .ifEmpty { state.survey?.cookies.orEmpty() }
         captchaLauncher.launch(
             CaptchaActivity.intent(this, template.surveyUrl, pendingCaptchaCookies),
         )
+    }
+
+    /**
+     * 变更 2：定时到点被人机验证拦截后，通知（全屏 Intent）打开本界面时恢复现场，
+     * 复用变更 1 的自动进入逻辑。
+     */
+    private fun resumePendingCaptchaIfAny() {
+        val pendingStore = PendingCaptchaStore(filesDir)
+        val pending = pendingStore.load() ?: return
+        if (System.currentTimeMillis() - pending.createdAtMillis > PENDING_CAPTCHA_TTL_MS) {
+            pendingStore.clear()
+            return
+        }
+        val template = state.templates.firstOrNull { it.id == pending.templateId } ?: return
+        lastSubmittedTemplate = template
+        pendingCaptchaCookies = pending.cookies
+        captchaRetriedGroups.clear()
+        captchaAutoEnterBlocked.clear()
+        captchaFallbackDisabled = false
+        state.outcomes = listOf(
+            GroupOutcome(
+                index = pending.groupIndex,
+                groupName = template.groups.getOrNull(pending.groupIndex)?.name.orEmpty(),
+                result = SubmitResult(
+                    ok = false,
+                    httpStatus = 0,
+                    message = getString(R.string.captcha_banner_server),
+                    raw = null,
+                    errorCode = SubmitErrorCode.CAPTCHA,
+                ),
+            ),
+        )
+        state.resultVisible = true
+        lastSubmitHadCaptcha = true
+        renderResults()
+        renderCaptchaBanner()
+        autoEnterCaptchaIfNeeded()
     }
 
     /** §13.2 第 10–12 步：同一会话重抓页面 → 带令牌提交 → 合并结果。 */
@@ -847,13 +1076,131 @@ class MainActivity : AppCompatActivity() {
             if (position >= 0) updated[position] = outcome else updated += outcome
             state.outcomes = updated.sortedBy { it.index }
             state.summary = BatchReport(state.outcomes, 0L).summary()
+            lastSubmitHadCaptcha = state.outcomes.any {
+                it.result.errorCode == SubmitErrorCode.CAPTCHA
+            }
             renderResults()
+            renderCaptchaBanner()
             when {
                 outcome.result.ok -> toast(R.string.captcha_retry_ok)
                 // 该组兜底机会已用尽（每组 1 次）；其他未兜底组的按钮仍会显示。
                 outcome.result.errorCode == SubmitErrorCode.CAPTCHA -> toast(R.string.captcha_expired)
                 else -> toast(getString(R.string.captcha_retry_failed, outcome.result.message))
             }
+        }
+    }
+
+    // ------------------------------------------------------------------ 定时任务控制
+
+    private fun onScheduleToggled(enabled: Boolean) {
+        if (!enabled) {
+            scheduleStore.clear()
+            scheduleTask = null
+            stopScheduleService()
+            scheduleFallbackJob?.cancel()
+            renderSchedule()
+            renderSubmitButton()
+            toast(R.string.schedule_cleared)
+            return
+        }
+        val template = state.current
+        if (template.name.isBlank()) {
+            toast(R.string.schedule_need_template)
+            revertScheduleSwitch()
+            return
+        }
+        val openAt = ScheduleTime.parse(binding.openAtInput.text?.toString())
+        if (openAt == null) {
+            toast(R.string.schedule_need_open_time)
+            revertScheduleSwitch()
+            return
+        }
+        val task = ScheduledTask(
+            templateId = template.id,
+            templateName = template.name,
+            openAtMillis = openAt,
+            leadMinutes = ScheduleMath.normalizeLeadMinutes(
+                binding.leadMinutesInput.text?.toString()?.trim()?.toIntOrNull()
+                    ?: ScheduleMath.DEFAULT_LEAD_MINUTES,
+            ),
+            createdAtMillis = System.currentTimeMillis(),
+            state = TaskState.ARMED,
+        )
+        scheduleStore.save(task)
+        scheduleTask = task
+        startScheduleService()
+        renderSchedule()
+        renderSubmitButton()
+    }
+
+    private fun revertScheduleSwitch() {
+        suppressScheduleToggle = true
+        binding.scheduleSwitch.isChecked = false
+        suppressScheduleToggle = false
+    }
+
+    /** 启动前台服务；**失败不崩 App**：降级为普通后台协程 + 通知，并在 UI 显式反馈。 */
+    private fun startScheduleService() {
+        requestNotificationPermissionIfNeeded()
+        val failure = try {
+            ContextCompat.startForegroundService(this, ScheduledSubmitService.startIntent(this))
+            null
+        } catch (t: Throwable) {
+            t
+        }
+        if (failure == null) {
+            binding.scheduleStatus.text = getString(R.string.schedule_service_started)
+        } else {
+            val reason = failure.message?.takeIf { it.isNotBlank() } ?: failure.javaClass.simpleName
+            binding.scheduleStatus.text = getString(R.string.schedule_service_failed, reason)
+            toast(binding.scheduleStatus.text.toString())
+            startScheduleFallback()
+        }
+    }
+
+    private fun stopScheduleService() {
+        try {
+            startService(ScheduledSubmitService.stopIntent(this))
+        } catch (_: Throwable) {
+            // 服务已停或不允许启动：忽略
+        }
+        Notifier.cancel(this, Notifier.ID_ONGOING)
+    }
+
+    /** 降级路径：普通后台协程（仅 App 前台时有效）+ 通知。 */
+    private fun startScheduleFallback() {
+        val task = scheduleTask ?: return
+        scheduleFallbackJob?.cancel()
+        scheduleFallbackJob = lifecycleScope.launch {
+            val remindAt = ScheduleMath.remindAtMillis(task)
+            if (remindAt > System.currentTimeMillis()) {
+                delay(remindAt - System.currentTimeMillis())
+                Notifier.notifyReminder(
+                    this@MainActivity,
+                    getString(R.string.schedule_remind_title),
+                    getString(
+                        R.string.schedule_remind_text,
+                        task.templateName,
+                        ScheduleTime.format(task.openAtMillis),
+                    ),
+                )
+            }
+            val wait = task.openAtMillis - System.currentTimeMillis()
+            if (wait > 0) delay(wait)
+            ScheduledRunner.runOnce(this@MainActivity, task)
+            scheduleTask = scheduleStore.load()
+            renderSchedule()
+        }
+    }
+
+    private fun requestNotificationPermissionIfNeeded() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
+        val granted = ContextCompat.checkSelfPermission(
+            this,
+            Notifier.PERMISSION_POST_NOTIFICATIONS,
+        ) == PackageManager.PERMISSION_GRANTED
+        if (!granted) {
+            notificationPermissionLauncher.launch(Notifier.PERMISSION_POST_NOTIFICATIONS)
         }
     }
 
@@ -934,7 +1281,13 @@ class MainActivity : AppCompatActivity() {
         toast(getString(resId))
     }
 
-    private companion object {
-        val QUOTED_PATTERN = Regex("「([^」]{1,60})」")
+    companion object {
+        /** 通知（全屏 Intent）点进来时恢复「待人工验证」现场。 */
+        const val EXTRA_RESUME_CAPTCHA = "extra_resume_captcha"
+
+        /** 待验证现场的保鲜期：超过则丢弃，避免用户几天后打开 App 被跳转。 */
+        private const val PENDING_CAPTCHA_TTL_MS = 30L * 60L * 1000L
+
+        private val QUOTED_PATTERN = Regex("「([^」]{1,60})」")
     }
 }

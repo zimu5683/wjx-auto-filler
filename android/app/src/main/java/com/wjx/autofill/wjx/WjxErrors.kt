@@ -22,6 +22,9 @@ object SubmitErrorCode {
     const val HTTP = "E_HTTP"
     const val PARSE = "E_PARSE"
     const val PAGED = "E_PAGED"
+
+    /** 问卷尚未开放（终态）：在 jqnonce 校验后、题目解析前短路，见 T16。 */
+    const val NOT_OPEN = "E_NOT_OPEN"
     const val CAPTCHA = "E_CAPTCHA"
     const val UNMATCHED = "E_UNMATCHED"
     const val EMPTY = "E_EMPTY"

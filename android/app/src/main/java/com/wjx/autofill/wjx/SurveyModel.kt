@@ -77,6 +77,20 @@ data class SurveyModel(
      * **additive 字段（Lead 2026-09-22 批准）**：带默认值，既有构造点全部兼容。
      */
     val sceneIdSource: SceneIdSource? = null,
+    /**
+     * 问卷开放时间（epoch millis，UTC）；null = 页面没给 / 解析失败（**不拦截**）。
+     * **additive 字段（T16）**：由 [SurveyTimeAdapter] 解析，用于 E_NOT_OPEN 判定。
+     */
+    val openAtMillis: Long? = null,
+    /**
+     * 页面层的人机验证**提示**（`var useAliVerify=1`）——**不是权威结论**。
+     *
+     * 权威判定在接口层：[WjxResponseClassifier] 收到业务码 7/22 → E_CAPTCHA。
+     * 注意 useAliVerify / captchaWrap / wjx_captch / needLoadAliVerify 这些标记在**所有问卷页**都存在
+     * （模板常量），只能读 useAliVerify 的**值**；看标记是否存在会 100% 误报。
+     * **additive 字段（T16）**：带默认值，既有构造点兼容。
+     */
+    val needsCaptchaHint: Boolean = false,
 )
 
 /**

@@ -291,14 +291,25 @@ object WjxPageParser {
      * 单测/复用入口：直接从 URL + HTML 解析（shortId 由 URL 推导）。
      * 解析失败抛 [WjxException]（E_URL / E_PARSE / E_PAGED）。
      */
-    fun parse(url: String, html: String, cookies: Map<String, String> = emptyMap()): SurveyModel {
+    fun parse(
+        url: String,
+        html: String,
+        cookies: Map<String, String> = emptyMap(),
+        timeAdapter: SurveyTimeAdapter = WjxTimeAdapter,
+    ): SurveyModel {
         val target = url.trim()
         val shortId = WjxUrls.shortIdOf(target)
             ?: throw WjxException(SubmitErrorCode.URL, WjxText.URL_INVALID)
-        return parse(target, shortId, html, cookies)
+        return parse(target, shortId, html, cookies, timeAdapter)
     }
 
-    fun parse(url: String, shortId: String, html: String, cookies: Map<String, String>): SurveyModel {
+    fun parse(
+        url: String,
+        shortId: String,
+        html: String,
+        cookies: Map<String, String>,
+        timeAdapter: SurveyTimeAdapter = WjxTimeAdapter,
+    ): SurveyModel {
         val title = firstGroup(TITLE_RE, html)
             ?.let { collapse(stripTags(unescapeHtml(it))) }
             ?.takeIf { it.isNotEmpty() }
@@ -306,6 +317,14 @@ object WjxPageParser {
 
         val jqnonce = firstGroup(JQNONCE_RE, html)?.trim().orEmpty()
         if (jqnonce.isEmpty()) throw WjxException(SubmitErrorCode.PARSE, WjxText.PARSE)
+
+        // 开放时间判定（T16）：未开放的问卷**仍带 jqnonce/starttime**，只是不下发题目，
+        // 所以必须在这里短路，否则会被误报成 E_PARSE「可能已关闭或页面改版」。
+        val nowMillis = System.currentTimeMillis()
+        val openTime = timeAdapter.parse(html, nowMillis)
+        if (!WjxTimeAdapter.isOpen(openTime, nowMillis)) {
+            throw WjxException(SubmitErrorCode.NOT_OPEN, WjxTimeAdapter.notOpenMessage(openTime))
+        }
 
         if (isPaged(html)) throw WjxException(SubmitErrorCode.PAGED, WjxText.PAGED)
 
@@ -337,6 +356,8 @@ object WjxPageParser {
             useAliVerify = useAliVerify,
             sceneId = sceneId,
             sceneIdSource = if (sceneId != null) SceneIdSource.PAGE else null,
+            openAtMillis = (openTime as? OpenTime.Known)?.openAtMillis,
+            needsCaptchaHint = useAliVerify,
         )
     }
 

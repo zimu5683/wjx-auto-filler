@@ -61,7 +61,9 @@ data class SurveyModel(
     val jqnonce: String, val ktimes: Int, val startTime: String,
     val captchaType: Int?, val cookies: Map<String, String>,
     val useAliVerify: Boolean = false,   // Lead 2026-09-22 改判后 additive：页面 var useAliVerify=1 时为 true；**仅作展示，不参与门控**
-    val sceneId: String? = null)          // Lead 2026-09-22 批准（additive）：阿里云验证场景标识（captchaSceneid）；缺省时提交不携带该字段
+    val sceneId: String? = null,          // Lead 2026-09-22 批准（additive）：阿里云验证场景标识（captchaSceneid）；缺省时提交不携带该字段
+    val openAtMillis: Long? = null,       // T16 additive：开放时间（epoch ms）；null = 解析不到（不影响提交）
+    val needsCaptchaHint: Boolean = false) // T16 additive：页面层提示（useAliVerify==1）；**不可靠**，权威信号是响应码 7/22
 data class AnswerPair(val field: String, val value: String)
 data class SubmitResult(val ok: Boolean, val httpStatus: Int, val message: String, val raw: String?,
     val errorCode: String? = null)   // Lead 2026-09-22 裁决新增（additive，带默认值：既有构造点全部兼容）
@@ -121,6 +123,8 @@ object SubmitErrorCode {
 | `SurveyModel` | `startTime` | String | `#starttime` 的 value，缺失空串 | 否 |
 | `SurveyModel` | `captchaType` | Int? | 页面 `captchaType`；`null` = 页面未声明验证码。**只用于 URL 的 `&capt=` 参数，不是门控信号** | **是** |
 | `SurveyModel` | `useAliVerify` | Boolean | 页面 `var useAliVerify`：`1`→`true`、缺失→`false`。**仅作展示/诊断，不参与判定**（本地门控已废除，§5.3 第 0 步） | 否（默认 `false`） |
+| `SurveyModel` | `openAtMillis` | Long? | 开放时间（epoch ms）；`null` = 解析不到/无限制。来源：`WjxTimeAdapter.parse`（BeginDate 优先，`divstarttime` 文案兜底）。见 §2.3 | **是**（默认 `null`） |
+| `SurveyModel` | `needsCaptchaHint` | Boolean | 页面层提示：`useAliVerify` 的值 `== 1` → `true`。**不可靠**（§2.3）：只用于提前提示，权威信号是响应码 7/22 | 否（默认 `false`） |
 | `SurveyModel` | `sceneId` | String? | 阿里云验证场景标识（页面 `captchaSceneid`/验证码初始化配置）。**Lead 已批准 additive**；`captchaToken` 非空且 `sceneId` 非空时写入 body；**缺省 → 不携带该字段**（本地不拦截，由服务端判定） | **是**（默认 `null`） |
 | `SurveyModel` | `cookies` | Map<String,String> | fetch 结束时的 cookie 快照（name→value，跳过空值） | 否（可为空 Map） |
 | `AnswerPair` | `field` | String | 映射键：题号 / 题干片段 / 选项文本（优先级 R1>R2>R3，§7） | 否（blank 由调用方过滤） |
@@ -128,6 +132,73 @@ object SubmitErrorCode {
 | `SubmitResult` | `ok`/`httpStatus`/`message`/`raw`/`errorCode` | — | 语义见 §8.1；**`errorCode == null` ⟺ 成功** | `raw`、`errorCode` 可为 null |
 
 > `questions` 的排序是契约：UI 左栏/右栏、匹配歧义提示里的「题号列表」都依赖它稳定有序。
+
+### 2.3 时间适配器与开放时间（T16 新增，纯 Kotlin/JVM；签名由 Lead 2026-09-22 冻结）
+
+```kotlin
+package com.wjx.autofill.wjx
+
+/** 问卷开放时间解析（可插拔：将来加平台只增适配器，不动核心） */
+interface SurveyTimeAdapter {
+    /** @param html 问卷页 HTML；@param nowMillis 当前时间（注入以便单测） */
+    fun parse(html: String, nowMillis: Long): OpenTime
+}
+
+sealed interface OpenTime {
+    /** 解析到开放时间；若 <= nowMillis 表示"已开放" */
+    data class Known(val openAtMillis: Long) : OpenTime
+    /** 解析不到：必须返回 Unknown，**绝不影响手动提交** */
+    data object Unknown : OpenTime
+}
+
+object WjxTimeAdapter : SurveyTimeAdapter
+```
+
+**解析规则（normative）**
+
+| 顺序 | 来源 | 规则 |
+|---|---|---|
+| 1 | `BeginDate="<epoch ms>"`（【实测】所有问卷页都有） | 正则 `BeginDate\s*=\s*["']?(\d{10,14})["']?`。位数 ≥ 12 → 当毫秒；位数 ≤ 11 → 当秒 ×1000。`<= 0` 或位数不在 10..14 → **跳过，走第 2 条** |
+| 2 | `<div id='divstarttime' ...>此问卷将于 YYYY-MM-DD HH:mm（北京时间）开放…` | 正则抓 `(\d{4})-(\d{2})-(\d{2})\s+(\d{2}):(\d{2})`，按 **固定 +08:00（Asia/Shanghai，无夏令时）** 解析成 epoch millis；秒按 `00` |
+| 3 | 都失败 | 返回 `OpenTime.Unknown`（**不抛异常、不失败、不禁用提交**） |
+
+**硬约束**
+1. **禁止 `java.time.*`**：minSdk 24 无 java.time 且工程未启用 core library desugaring（lint NewApi 会拦）。文案兜底解析必须用 `java.util.Calendar` + `TimeZone.getTimeZone("Asia/Shanghai")`，或纯算术固定 +08:00 偏移。
+2. **纯函数**：无网络、无 `android.*`、无副作用；同一个 `(html, nowMillis)` 必须得到同一结果。
+3. **`nowMillis` 的用途**：作为相对时间（如 `left='N'`）换算基准与单测注入点。**adapter 不得因为「时间已过」就返回 `Unknown`** —— 已开放的问卷也要如实返回 `Known`，供 UI 显示与日志。
+4. **「是否已开放」由调用方判定**：`openAtMillis <= nowMillis` → **已开放（等号算已开放）**；`>` → 未开放。
+5. 返回值一律是 **epoch millis（UTC 基准）**，不是格式化文本；格式化只发生在展示层（`yyyy-MM-dd HH:mm`，Asia/Shanghai）。
+6. 已知精度边界：文案兜底只能精确到分钟；**BeginDate 缺失时不得做秒级判定**。
+
+**测试向量（qa-build 直接照抄）**
+
+| 输入 | 期望 |
+|---|---|
+| `BeginDate="1790040856347"`（tfGAWU4，未开放） | `Known(1790040856347)`；`> now` → 未开放 |
+| `BeginDate="1790034767873"`（P2M09FG，已开放） | `Known(1790034767873)`；`<= now` → 已开放 |
+| `BeginDate="0"` / `BeginDate="abc"` / 缺失，且无文案 | `Unknown` |
+| 仅有 `此问卷将于 2026-09-23 09:33（北京时间）开放` | `Known(1790040856347)`（+08:00，秒=00） |
+| 空 HTML | `Unknown` |
+
+**`openAtMillis` / `needsCaptchaHint` 语义（`SurveyModel` additive，带默认值）**
+
+```kotlin
+val openAtMillis: Long? = null,        // 来自 WjxTimeAdapter；Unknown 时 null
+val needsCaptchaHint: Boolean = false, // 由 useAliVerify 的**值**推导（==1 才 true）
+```
+
+| 字段 | 语义 | 消费者 |
+|---|---|---|
+| `openAtMillis` | 问卷开放时间（epoch ms）；`null` = 解析不到/无限制。**`null` 时一切照旧**（不失败、不禁用提交） | `fetch` 的 `E_NOT_OPEN` 短路（§5.2）；UI 状态条；调度服务（DESIGN §13） |
+| `needsCaptchaHint` | **页面层提示**：`useAliVerify` 的值 `== 1` 时为 `true` | UI 横幅（提前提示）。**权威信号永远是响应码 7/22 → `E_CAPTCHA`** |
+
+> **`needsCaptchaHint` 不可靠（必须按此实现与措辞）**
+> 1. `useAliVerify` / `captchaWrap` / `wjx_captch` / `needLoadAliVerify` 都是**页面模板常量，所有问卷都有**（含从未被拦的 P2M09FG）→ **只读 `useAliVerify` 的值，绝不按标记是否存在判断**（按存在性判断会 100% 误报）。
+> 2. `useAliVerify` 只是页面**初始值**；服务端可在**任意一次提交**上要求二次校验（响应码 7/22）。因此 `needsCaptchaHint=true` 只用于**提前提示**，**不得**据此跳过提交或本地判 `E_CAPTCHA`。
+> 3. `needsCaptchaHint=false` **不等于**服务端一定放行 —— UI 文案必须如实写「未检测到 ≠ 一定不需要验证」。
+> 4. 测试必须覆盖：合成 HTML 含 `useAliVerify=0` + `captchaWrap`/`wjx_captch` 标记 → `needsCaptchaHint == false`。
+>
+> **不做预检提交（用户决策，normative）**：本实现**只做页面层读取**（`useAliVerify` 的值 → `needsCaptchaHint`）**+ 响应层判定**（提交响应码 7/22 → `E_CAPTCHA`），**不发起任何额外探测请求**（不为了「探安全门」而故意发缺答/空答请求）。因此 `needsCaptchaHint == false` 的唯一结论是「页面层未提示」，是否被拦只能由**真实提交的响应**回答。
 
 ---
 
@@ -372,6 +443,7 @@ data class ImportReport(
 5. 读取响应：HTTP 非 200 → `E_HTTP`（message：「问卷服务器返回异常（HTTP %d）」）；IO 异常 → `E_NETWORK`（「网络连接失败，请检查网络后重试」）。
 6. 解码：优先 `Content-Type; charset=`，无则 UTF-8；**不要**用系统默认编码。
 7. 解析（第 6 章）→ 失败 → `E_PARSE` / `E_PAGED`。
+   **开放时间短路（T16，normative）**：在**校验 `jqnonce` 之后、题目解析之前**判定开放时间——若 `openAtMillis != null && openAtMillis > System.currentTimeMillis()` → 立即 `Result.failure(WjxException(E_NOT_OPEN, "该问卷将于 yyyy-MM-dd HH:mm 开放"))`（时间按 Asia/Shanghai 格式化）。**未开放页仍带 `jqnonce`/`starttime`，只是题目不下发（fieldset/topic 计数 0）**，不在此处短路会被误报成 `E_PARSE`（实测缺陷）。
 8. 成功返回 `Result.success(SurveyModel)`。
 9. `fetch` 内部**不重试**（重试由 UI 决定）。
 
@@ -452,6 +524,8 @@ data class ImportReport(
 | `startTime` | `id="starttime"` 的 `value` 属性 | `""` |
 | `captchaType` | 正则 `captchaType\s*=\s*['"]?(\d+)['"]?` | 若 `useAliVerify=1` 或 `needLoadAliVerify=1` → `2`；否则 `null`。**仅用于 `&capt=` 参数，不作门控** |
 | `useAliVerify` | 正则 `var\s+useAliVerify\s*=\s*(\d+)` | 缺失 → `false`；`1` → `true`。**仅作展示/诊断，不作门控**（Lead 2026-09-22 改判：总是先尝试提交） |
+| `openAtMillis` | `WjxTimeAdapter.parse(html, now)`：`BeginDate` 优先 → `divstarttime` 文案兜底 | `null`（不影响提交） |
+| `needsCaptchaHint` | `useAliVerify` 的**值**（`== 1` → `true`）；**不看标记是否存在** | `false` |
 | `cookies` | fetch 结束后 CookieManager 快照（name→value，跳过空值） | 空 Map |
 
 ### 6.5 分页问卷检测（V1 不支持，必须显式报错）
@@ -527,10 +601,13 @@ data class ImportReport(
 | `E_EMPTY` | 0 | 没有可提交的答案 | 过滤空值后 answers 为空 |
 | `E_LIMIT` | 0 | 答案超过 3000 字上限（题号 %d） | 文本超长 |
 | `E_UNSUPPORTED` | 0 | 题号 %d（%s）暂不支持自动填写 | 命中 MATRIX/SLIDER/OTHER |
+| `E_NOT_OPEN` | 200 | 该问卷将于 %s 开放（%s = `yyyy-MM-dd HH:mm`，Asia/Shanghai） | `openAtMillis > now`（fetch 阶段短路，§5.2 第 7 步） |
 | `E_REJECTED` | 实际码 | 问卷服务端拒绝：<服务端文案> | 业务失败（HTTP 200 但响应非成功） |
 | `E_UNKNOWN` | 实际码 | 未知错误：<摘要> | 兜底 |
 
 `E_UNMATCHED` / `E_UNSUPPORTED` / `E_EMPTY` / `E_LIMIT` 是**本地错误**：`httpStatus = 0`、`raw = null`，且**不发出任何网络请求**。
+
+`E_NOT_OPEN` 是 **fetch 阶段错误**（`Result.failure`，HTTP 200 已拿到页面）：`httpStatus = 200`、`raw = null`；**终态**——UI 不提供普通「重试」（重试不会变开放），改为显示开放时间 + 可创建到点自动提交任务（DESIGN §13）。
 
 > T3 实证（2026-09-22）：样本问卷（`useAliVerify=1`、`captchaType='2'`）的提交被服务端以业务码 `7` 拒绝，而 **HTTP 状态是 200** —— 这是「HTTP 200 ≠ 成功」的铁证，分类器必须按 §8.4 解析正文。同时注意：**`captchaType` 不是门控信号**（6 个问卷实测全为 `'2'`，见 §11.3）。
 
@@ -541,9 +618,12 @@ data class ImportReport(
 - `E_CAPTCHA` → 「该问卷需要人机验证，无法自动提交」（终态，不提供重试）
 - `E_UNMATCHED` → 跳到字段映射页，把明细里的字段高亮
 - `E_REJECTED` → 原文展示服务端文案（例如「请输入正确的学号」）
+- `E_NOT_OPEN` → 状态条显示开放时间（「将于 2026-09-23 09:33 开放」）；主提交按钮置灰，但**保留「仍要尝试提交」入口**（解析可能不准/服务端可能已开放）；可创建到点自动提交任务
 - 其余 → 通用错误提示 + 原始 raw 可折叠查看（仅调试用；**不做 App 内日志页**，见 DESIGN.md 非目标）
 
 ### 8.4 响应分类器（`WjxResponseClassifier`，T4 实现，单点可改）
+
+> `E_NOT_OPEN` **不经过本分类器**：它是 `fetch` 阶段的短路错误（§5.2 第 7 步）；本分类器只处理 `submit` 的响应正文。
 
 输入：HTTP 码 + 响应正文；输出：`SubmitResult`。按顺序判定（规则已按 T3 实测回填）：
 
@@ -672,7 +752,7 @@ class SubmitCoordinator(
 ### 11.2 由此产生的两条强制规则
 
 1. **`E_CAPTCHA` 是终态**：UI 不提供重试（重试必然同样被拦），并在会话内记住该 URL 的结论，避免重复无效提交。
-2. **不做本地验证码门控（Lead 2026-09-22 改判，废除上一版「`useAliVerify==true` 硬门控」）**：无论 `useAliVerify` 为何值都**先发一次提交**，只有响应业务码 7/22（或 aliyunwaf）才走 §13 兜底。理由：本地门控的**假阴性**代价（把本可提交的问卷判死，一次请求都不发）大于多一次被拒请求的代价（**不产生答卷**）。`useAliVerify` 仅作展示。
+2. **不做本地验证码门控（Lead 2026-09-22 改判，废除上一版「`useAliVerify==true` 硬门控」）**：无论 `useAliVerify` 为何值都**先发一次提交**，只有响应业务码 7/22（或 aliyunwaf）才走 §13 兜底。理由：本地门控的**假阴性**代价（把本可提交的问卷判死，一次请求都不发）大于多一次被拒请求的代价（**不产生答卷**）。`useAliVerify` 仅作展示。 **也不做任何预检/探测请求**（用户决策，见 §2.3）。
 
 **以上全部是 §5.3/§8.4 的行为调整；第 2 章签名只增加了 Lead 批准的 additive 字段/参数（`errorCode`、`useAliVerify`、`captchaToken`，均带默认值），其余签名不变。**
 
@@ -704,6 +784,9 @@ class SubmitCoordinator(
 - [ ] `submit` 对样本问卷的 3 个必填字段能构造出 `1$..}2$..}3$..` 形态的 submitdata（可用 fake 网络层断言）
 - [ ] `submit` 除 `CancellationException` 外不抛异常；本地错误不发网络请求
 - [ ] 分页问卷检测（6.5）有单测 fixture
+- [ ] `WjxTimeAdapter.parse` 测试向量（正常 BeginDate / 已开放 / `0` / 非法 / 纯文案兜底 / 空 HTML）全过；**无 `java.time` 引用**
+- [ ] `E_NOT_OPEN` 短路位置正确（**jqnonce 之后、题目解析之前**）：未开放页 fixture 不再误报 `E_PARSE`，message 含 `yyyy-MM-dd HH:mm`（Asia/Shanghai）
+- [ ] `needsCaptchaHint`：`useAliVerify=0` + 页面含 `captchaWrap`/`wjx_captch` 标记 → `false`（只读值，不读标记）
 - [ ] 响应分类器（8.4）用**真实响应**做向量：`7〒需要安全校验，请重新提交！`→E_CAPTCHA、`10〒`→成功、`11〒`→成功（JS 推导）、`22〒`→E_CAPTCHA（JS 推导）、`5〒请输入正确的学号`→E_REJECTED、aliyunwaf→E_CAPTCHA、空正文→E_PARSE、非 〒 且无关键词→E_UNKNOWN
 - [ ] **无本地门控单测**：`useAliVerify=true` 且 `captchaToken=null` 时 `submit` **仍发出一次 POST**（假阴性防护）；仅当响应业务码 7/22 才返回 `E_CAPTCHA`
 - [ ] §13 兜底契约：`fetch(url, cookies)` 注入语义、`submit(..., captchaToken)` 分支、`sceneId` 解析（见 §13.10）
@@ -711,6 +794,8 @@ class SubmitCoordinator(
 
 **T5（android-dev）**
 - [ ] `templates.json` 读写符合 4.2–4.4（含原子写、损坏备份、clamp、id 去重）
+- [ ] 问卷状态条（开放时间/已开放/解析不到）+ 人机验证横幅（**如实措辞**：未检测到 ≠ 一定不需要）+「到点自动提交」开关 + 提前量默认 10 分钟
+- [ ] 未开放时主提交按钮置灰，但**保留「仍要尝试提交」入口**
 - [ ] `SubmitCoordinator` 并发上限 = clamp(concurrency,1,5)，每组独立 fetch，结果按组序返回
 - [ ] UI 用 `result.errorCode` 分支（`null` = 成功），不用文案匹配
 - [ ] 未匹配字段在 UI 可见（高亮 + 明细），不静默丢弃
@@ -718,6 +803,7 @@ class SubmitCoordinator(
 
 **T6（qa-build）**
 - [ ] 第 3.4 节测试向量全部落地
+- [ ] 定时任务纯函数与持久化：`ScheduleMath.remindAtMillis`/`normalizeLeadMinutes`（0 / 正常 / 超 1440 / 负值）、`FileScheduledTaskStore` 的原子写与损坏回退（`schedule.json.bad-<millis>`）、`schemaVersion` 缺失/不符的降级
 - [ ] 构造 HTML fixture 覆盖 6.2 的每一种题型判定
 - [ ] 版本比较、模板导入导出（含 schemaVersion=2 拒绝、坏 JSON 备份）单测
 - [ ] 并发上限断言（fake 层记录最大同时在线请求数 ≤ concurrency）
@@ -907,3 +993,5 @@ internal const val JS_HARVEST =
 | 2026-09-22 | **Lead 改判（两条）**：① **取消 `useAliVerify` 本地门控**，改为「总是先尝试提交，只有响应 7/22 才走兜底」（避免假阴性）；② `&ktimes` 下限取**已验证值 4**（`max(4,·)`），并更正影响说明：0/1/2/3→4 会改变 XOR key（1→4）→ **`jqsign` 随之改变**，URL 与签名必须同源。§5.3/§6.4/§8.2/§11.1/§11.2/§11.3/§12/§13.1/§13.2/§13.10 同步 | Lead / architect |
 | 2026-09-22 | **§13.3 Cookie 基准改为问卷 URL 的 origin**（`CookieHeader.originOf(url, fallback)`；方向①注入与④清理同源），修复写死 `https://www.wjx.cn/` 导致 `v.wjx.cn` 子域验证页收不到会话 cookie 的缺陷；§13.10 T5 加静态检查项 | android-dev（证据）/ Lead（批准）/ architect |
 | 2026-09-22 | §0 补用户佐证（微信扫码填写未弹人机验证）；§5.3 第 5 步补 V3/V4/V5 实测（补发校验字段会把 10 推向 7 → 最小请求形态才是正确形态） | Lead / api-debug / architect |
+| 2026-09-22 | **T18：新增 §2.3 时间适配器**（`SurveyTimeAdapter`/`OpenTime`/`WjxTimeAdapter` 逐字签名 + 解析规则 + 6 条硬约束 + 测试向量）、`SurveyModel` additive `openAtMillis`/`needsCaptchaHint`、**`E_NOT_OPEN`**（fetch 阶段短路，§5.2 第 7 步）、`needsCaptchaHint` 不可靠性四条铁律；§2.2/§6.4/§8.2/§8.3/§8.4/§12 同步 | Lead（冻结签名）/ architect |
+| 2026-09-22 | **用户决策：不做预检提交** —— §2.3 新增明确声明「只做页面层读取 + 响应层判定，不发起任何额外探测请求」，§11.2 同步 | 用户 / Lead / architect |

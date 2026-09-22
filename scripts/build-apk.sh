@@ -137,6 +137,18 @@ write_report() { # write_report <结论>
         echo "- releaseRuntimeClasspath 中 com.google.android.gms 行数：**$GMS_COUNT**（0 = 无 GMS）"
         echo "- minSdk 24 → Android 7.0 及以上设备均可安装"
         echo
+        echo "## 需真机人工验证（JVM 单测覆盖不到）"
+        echo
+        echo "以下能力依赖 Android 运行时（Service / Notification / WebView / Camera / 系统安装器），"
+        echo "单元测试无法覆盖，**发布前需在真机上人工验证**："
+        echo
+        echo "1. 前台常驻服务与通知：常驻通知可见、进程不被杀、到点自动进入验证页（高优先级全屏 Intent）。"
+        echo "   1a. **响铃/震动必须是可选项**：开关默认开启且用户可关闭；关闭后仍必须有高优先级全屏通知（不得变成静默/普通通知）。"
+        echo "2. WebView 人工验证兜底：触发兜底 → WebView 内完成验证 → 收割 captchaVerifyParam/sceneId → 自动继续提交。"
+        echo "   （可机械审查的部分已由第 8 节静态审查覆盖：脚本固定化、无 JS 桥、Cookie 双向注入的纯逻辑有单测。）"
+        echo "3. 相机实时扫码与相册选图解码（QrDecoder 的核心解码逻辑已由 QrDecodeTest 用真实截图夹具覆盖）。"
+        echo "4. 应用内更新：下载 APK → FileProvider → 系统安装器 → 覆盖安装（需与正式签名包同签名）。"
+        echo
         echo "## 复现命令"
         echo
         echo '~~~bash'

@@ -144,6 +144,71 @@
     <string name="captcha_retry_ok">验证通过，该组已提交成功</string>
     <string name="captcha_retry_failed">验证后仍然失败：%1$s</string>
 
+    <!-- 定时自动提交 -->
+    <string name="schedule_toggle_title">到点自动提交</string>
+    <string name="schedule_toggle_hint">同一时刻只允许 1 个定时任务；需要本服务常驻运行</string>
+    <string name="label_open_at">问卷开放时间</string>
+    <string name="hint_open_at">2026-09-23 09:00</string>
+    <string name="label_remind_minutes">提前提醒（分钟）</string>
+    <string name="hint_remind_minutes">10</string>
+    <string name="schedule_saved">定时任务已保存</string>
+    <string name="schedule_cleared">定时任务已取消</string>
+    <string name="schedule_need_open_time">请先填写问卷开放时间（格式 2026-09-23 09:00）</string>
+    <string name="schedule_need_template">请先「保存模板」，定时任务需要绑定一份模板</string>
+    <string name="schedule_service_started">定时提交已开启，到点会自动提交并通知</string>
+    <string name="schedule_service_stopped">定时提交已关闭</string>
+    <string name="schedule_service_failed">前台服务启动失败：%1$s（已降级为普通后台任务，仅 App 在前台时有效）</string>
+    <string name="schedule_need_notification_permission">未授予通知权限：到点不会提醒，前台服务通知也不可见</string>
+    <string name="schedule_ongoing_title">定时提交已开启</string>
+    <string name="schedule_ongoing_text">等待问卷开放…</string>
+    <string name="schedule_remind_title">问卷即将开放</string>
+    <string name="schedule_remind_text">%1$s 将于 %2$s 开放，请留意人机验证</string>
+    <string name="schedule_result_title">定时提交结果</string>
+    <string name="schedule_interrupted">上次定时提交被系统中止，未确认是否已提交。为避免重复答卷，不会自动重跑，请手动确认。</string>
+    <string name="schedule_captcha_notify_title">定时提交需要人机验证</string>
+    <string name="schedule_captcha_notify_text">到点提交被人机验证拦截：%1$s。请打开 App 手动完成验证后重试（App 不会绕过验证码）。</string>
+    <string name="schedule_template_missing">定时任务绑定的模板已不存在，本次未提交</string>
+    <string name="schedule_run_failed">定时提交执行失败</string>
+    <string name="schedule_channel_ongoing">定时任务常驻</string>
+    <string name="schedule_channel_ongoing_desc">定时提交服务运行中的常驻提示</string>
+    <string name="schedule_channel_remind">开放提醒</string>
+    <string name="schedule_channel_remind_desc">问卷即将开放时的提醒</string>
+    <string name="schedule_channel_result">提交结果</string>
+    <string name="schedule_channel_result_desc">定时提交的成功/失败/需验证通知</string>
+    <string name="schedule_status_line">定时：%1$s　开放 %2$s</string>
+    <string name="schedule_status_none">未设置定时任务</string>
+    <string name="schedule_alert_sound">到点响铃提醒（默认开）</string>
+    <string name="schedule_alert_vibrate">到点震动提醒（默认开）</string>
+    <string name="schedule_channel_captcha_alert">需要人工验证（响铃震动）</string>
+    <string name="schedule_channel_captcha_alert_desc">到点需要人工完成验证时的全屏提醒</string>
+    <string name="schedule_channel_captcha_silent">需要人工验证（静默）</string>
+    <string name="schedule_channel_captcha_silent_desc">到点需要人工完成验证时的静默全屏提醒</string>
+    <string name="schedule_state_armed">已排定</string>
+    <string name="schedule_state_reminded">已提醒</string>
+    <string name="schedule_state_running">提交中</string>
+    <string name="schedule_state_done_ok">已完成</string>
+    <string name="schedule_state_done_fail">未成功</string>
+    <string name="schedule_state_cancelled">已取消</string>
+
+    <!-- 问卷状态条 -->
+    <string name="survey_status_unknown">开放时间未知：点「解析问卷」获取</string>
+    <string name="survey_status_not_open">尚未开放，将于 %1$s 开放</string>
+    <string name="survey_status_open">已开放，可提交</string>
+
+    <!-- 人机验证横幅（措辞如实：检测到=必提示；未检测到≠服务端一定放行） -->
+    <string name="captcha_banner_title">该问卷涉及人机验证</string>
+    <string name="captcha_banner_detected">页面声明开启了阿里云安全校验（useAliVerify=1）。到点自动提交很可能被拦截，届时只会推送通知，请手动完成验证后重试。</string>
+    <string name="captcha_banner_server">最近一次提交被服务端要求人机验证。请手动完成验证后重试。</string>
+    <string name="captcha_banner_clear">本次解析未检测到人机验证声明；但服务端仍可能在提交时要求校验，届时只会推送通知，请手动完成验证后重试。</string>
+    <string name="captcha_banner_caveat">注意：未检测到校验声明，并不代表服务端一定放行 —— 服务端可以在任意一次提交上要求校验。本工具不会绕过验证码。</string>
+    <string name="captcha_banner_action">去完成验证</string>
+
+    <!-- 未开放时的手动提交 -->
+    <string name="submit_closed_label">尚未开放 · 立即提交</string>
+    <string name="submit_closed_confirm_title">问卷尚未开放</string>
+    <string name="submit_closed_confirm_message">当前时间早于开放时间 %1$s，现在提交很可能被服务端拒绝。仍要手动提交吗？</string>
+    <string name="submit_closed_confirm_ok">仍要提交</string>
+
     <!-- 通用 -->
     <string name="action_confirm">确定</string>
     <string name="action_cancel">取消</string>

@@ -12,6 +12,15 @@
     <!-- 应用内自动更新：下载 APK 后拉起系统安装器 -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
+    <!-- 定时自动提交：前台常驻服务 + 通知 + 到点唤醒 -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <!-- 到点需要人工验证时优先用全屏 Intent 拉起验证流程（Android 14+ 需系统授权，未授权自动退化） -->
+    <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
+    <uses-permission android:name="android.permission.VIBRATE" />
+
     <!-- 配置含姓名/学号等个人信息：禁止云备份与 adb backup 带走（契约 §4.4 隐私节） -->
     <application
         android:allowBackup="false"
@@ -31,6 +40,19 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!--
+            定时自动提交前台服务：只做前台常驻（不用 AlarmManager/WorkManager）。
+            刻意用 specialUse 而非 dataSync —— Android 15 对 dataSync 有 6 小时上限，跨夜定时会被掐断。
+        -->
+        <service
+            android:name=".schedule.ScheduledSubmitService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="scheduled_survey_submission" />
+        </service>
 
         <!-- 实时扫码页：CameraX 预览 + zxing 解码；相机权限只在进入本页时申请 -->
         <activity

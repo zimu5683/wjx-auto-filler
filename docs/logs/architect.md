@@ -264,4 +264,23 @@ body: submitdata=1$…}2$…}3$…
 - delivery：文档仍写 `max(1, 页面值)` 且 USAGE 错误表仍写「useAliVerify=1 硬门控」→ 两处都要改（floor 4；触发只看响应码）
 - qa-build：加 floor 4 用例（ktimes≥4 且 jqsign 同源；ktimes=0 时签名**会变**）、无门控用例（总是发 POST）、cookie origin 用例（v.wjx.cn）
 - api-debug：确认已落地；提醒 jqsign 同源（已满足）
+## 补充 13：T18 定时提交/时间适配器文档（task-17）
+
+### 落盘
+- 契约 §2.3 时间适配器（Lead 冻结签名逐字：SurveyTimeAdapter.parse(html, nowMillis)/OpenTime.Known|Unknown/WjxTimeAdapter）+ 解析规则（BeginDate 优先、文案兜底 +08:00、都失败 Unknown）+ 6 条硬约束（**禁 java.time**：minSdk 24 无 java.time 且未启用 desugaring；nowMillis 只做换算基准；已开放也返回 Known；等号算已开放）+ 测试向量
+- SurveyModel additive：openAtMillis: Long? = null / needsCaptchaHint: Boolean = false；§2.2/§6.4 字段语义同步
+- **needsCaptchaHint 不可靠性四条铁律**（只读值不读标记；仅提前提示；false ≠ 一定放行；测试须覆盖 useAliVerify=0 + 模板标记存在 → false）
+- E_NOT_OPEN：§5.2 第 7 步短路（**jqnonce 之后、题目解析之前**）、§8.2 错误表（httpStatus=200、终态、message「该问卷将于 yyyy-MM-dd HH:mm 开放」Asia/Shanghai）、§8.3 UI 动作、§8.4 声明不经分类器
+- DESIGN §13 定时提交与前台服务设计（冻结 schedule 签名 + FileScheduledTaskStore + 触发语义表 + specialUse vs dataSync + ROM 杀进程兜底 + 单任务 + 不做 BOOT_COMPLETED 边界），原 §13 顺延 §14；风险表 R13–R16
+- §12 DoD 增 T4/T5/T6 条目（适配器向量、短路位置、hint 规则、状态条/横幅/开关、ScheduleMath 与 store 持久化）
+
+### 复核代码时发现的两个真实问题（已上报）
+1. **strings.xml 缺 16 个 schedule_* 字符串**：ScheduledRunner/Notifier/ScheduledSubmitService 引用了 schedule_channel_ongoing(_desc)、schedule_channel_remind(_desc)、schedule_channel_result(_desc)、schedule_ongoing_title/_text、schedule_result_title、schedule_interrupted、schedule_remind_title/_text、schedule_template_missing、schedule_run_failed、schedule_captcha_notify_title/_text —— 资源里**一个都没有**（grep 确认），当前状态**编译必失败**
+2. **android-dev 现有 schedule 实现与 Lead 冻结签名不一致**：ScheduledTask 字段集不同（现有 id/surveyUrl/remindBeforeMinutes/enabled/lastRun*，冻结为 leadMinutes/createdAtMillis/state + 新增 TaskState）、ScheduledTaskStore 是 class 而冻结为 interface（save 参数非空、clear 分离）、remindAtMillis 属性应迁到 ScheduleMath、常量应改为 normalizeLeadMinutes(0..1440)
+3. 正面确认：Manifest 已含 FOREGROUND_SERVICE / FOREGROUND_SERVICE_SPECIAL_USE / POST_NOTIFICATIONS / WAKE_LOCK + foregroundServiceType="specialUse"，服务侧 START_STICKY 与 startForegroundSafely 降级均已实现，与 DESIGN §13 一致
+## 补充 14：Lead 三条回复落地
+
+- 问题 1（strings.xml 缺 16 个 schedule_* + schedule 签名不一致）：Lead 裁定**冻结签名权威**，android-dev 按清单改造；补字符串属 android-dev scope
+- 问题 2（lastRun*/结果明细）：Lead 裁定**不加**，ScheduledTask 保持精简，结果由 state（DONE_OK/DONE_FAIL）+ 通知承载、失败原因用既有 errorCode 文案 —— 与 DESIGN §13.2 冻结签名一致，文档无需改
+- **新口径（用户决策）**：**不做预检提交** —— 契约 §2.3 新增独立声明「只做页面层读取（useAliVerify 值）+ 响应层判定（7/22），不发起任何额外探测请求」，§11.2 与 DESIGN §12.2 第 6 条同步；两处变更记录已加行；grep 全 docs 确认无任何暗示探测机制的表述
 

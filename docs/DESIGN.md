@@ -285,6 +285,10 @@
 | R9 | GitHub API 限流（未认证 60/h） | 检查更新失败 | 低 | 24h 节流 + 手动触发；失败静默（更新不是主流程） | T5 |
 | R10 | 用户答案含个人信息，合规风险 | 隐私投诉 | 低 | 仅本地存储、不上传、不埋点；`allowBackup=false`；不保存 cookie | T5 |
 | R11 | 相机权限被拒/无相机设备 | 扫码不可用 | 中 | `required=false`；降级到相册与手输链接；不崩溃 | T5 |
+| **R13** | **前台服务被国产 ROM 杀掉**（EMUI/MagicOS/MIUI 等），到点不准时 | 自动提交失败或延迟，用户以为已提交 | 高 | `START_STICKY` 重建 + 恢复任务 + **catch-up**（已过点立即提交）；常驻通知 + 白名单引导；UI 如实提示；**不承诺 100% 准时** | T5 / T7（文档） |
+| **R14** | 通知权限被拒（Android 13+ `POST_NOTIFICATIONS`） | 用户看不到任务状态与提醒 | 中 | 服务仍可运行；UI 提示开启通知权限；状态条在 App 内可见 | T5 |
+| **R15** | 前台服务启动被系统拒绝（`SecurityException`/FGS 限制） | 自动提交不生效 | 中 | **不得崩 App**：降级普通后台协程 + 通知 + UI 显式反馈「可能不准时」 | T5 |
+| **R16** | 设备重启后任务不恢复（**刻意不做 `BOOT_COMPLETED`**） | 用户以为任务还在，实际已失效 | 中 | 交付文档写明；App 启动时提示「有未完成任务，需重新开启自动提交」；UI 不谎报状态 | T5 / T7（文档） |
 | **R12** | **请求形态触发风控（不是问卷属性）**：早期观测「`useAliVerify=0` 仍返回裸 22」曾被解读为「服务端主动要求二次校验」；**V6 单变量 A/B 证明裸 22 由 `ktimes=0` 触发**（0→4 后同一问卷返回 `10〒` 成功）。另实测**补发 `rn`/`captchaVerifyParam`/`sceneId` 会把成功（10）变成 `7〒需要安全校验`** | 请求形态不对，本可成功的问卷也会失败；还会误导我们判定「该问卷需要验证码」 | **已发生（已修正）** | ① `&ktimes = max(4, pageKtimes)`（契约 §5.3；下限取 V6 **已验证值 4**）；② V1 **不补发** `rn`/`lct`/`jpm`/`cst`/`source`/`captchaVerifyParam`/`sceneId`；③ 交付文档不得声称「页面开关决定能否提交」 | api-debug（证据）/ architect（契约）/ T5 |
 
 **R1 已实测确认且已缓解**：T3 实测样本问卷被业务码 7 拦截（HTTP 200 + `7〒需要安全校验，请重新提交！`），T3.5 进一步确认门控信号是 `useAliVerify`（6/6 问卷 `captchaType='2'`，用它门控会判死全部问卷）。用户已批准仅验证码环节用 App 内 WebView 兜底（§12），这也是**唯一的端到端验证手段**（§12.8）。
@@ -307,6 +311,7 @@
 3. **显式触发**：必须用户点「人工验证后重试」；不自动弹 WebView、不自动重试。
 4. **失败可读**：所有兜底失败仍是 `E_CAPTCHA` 终态 + 明确的人类文案（不新增错误码，保持错误表稳定）。
 5. **不做本地门控（避免假阴性）**：`useAliVerify` 只是页面初始值，本地判 `E_CAPTCHA` 会把本来能提交的问卷判死（一次请求都不发）；正确做法是**总是先尝试提交**，由服务端响应决定是否走兜底。代价仅是多一次被拒请求（不产生答卷）。
+6. **不做预检提交（用户决策）**：只做**页面层读取**（`useAliVerify` 值 → `needsCaptchaHint`）+ **响应层判定**（7/22 → `E_CAPTCHA`），**不发起任何额外探测请求**（不为探安全门而故意发缺答/空答）。`needsCaptchaHint=false` 只是「页面层未提示」，权威结论只来自真实提交的响应。
 
 ### 12.3 组件与时序
 
@@ -368,7 +373,88 @@ https-only + 顶层导航白名单（仅 `*.wjx.cn`）、禁用文件访问/多�
 
 ---
 
-## 13. 与冻结契约的关系
+## 13. 定时提交与前台服务设计（T17）
+
+### 13.1 用户需求与决策
+用户已确认：**只做前台常驻服务**（不做 `AlarmManager`/`WorkManager`）；到点遇人机验证**只推通知、不弹界面**；提前提醒**可配置、默认 10 分钟**；**同一时刻只允许 1 个定时任务**。
+目标：问卷未开放时用户可设「到点自动提交」，App 在前台服务里等到开放时间，再调用既有 `SubmitCoordinator`（**复用，绝不重写提交逻辑**）。
+
+### 13.2 冻结签名（Lead 2026-09-22）
+
+```kotlin
+package com.wjx.autofill.schedule
+
+enum class TaskState { ARMED, REMINDED, RUNNING, DONE_OK, DONE_FAIL, CANCELLED }
+
+data class ScheduledTask(
+    val templateId: String,
+    val templateName: String,
+    val openAtMillis: Long,
+    val leadMinutes: Int = 10,          // 提前提醒分钟数，用户可设
+    val createdAtMillis: Long,
+    val state: TaskState,
+)
+
+/** 纯函数，必须可 JVM 单测 */
+object ScheduleMath {
+    /** 提醒时刻 = openAtMillis - leadMinutes*60_000 */
+    fun remindAtMillis(task: ScheduledTask): Long
+    /** 归一化提前量：越界 clamp 到 0..1440（默认值 10 由 ScheduledTask 构造默认值承担） */
+    fun normalizeLeadMinutes(input: Int): Int
+}
+
+interface ScheduledTaskStore {
+    fun load(): ScheduledTask?
+    fun save(task: ScheduledTask): Boolean
+    fun clear(): Boolean
+}
+```
+
+唯一实现：`FileScheduledTaskStore(rootDirectory: File) : ScheduledTaskStore` —— 纯 `java.io` + `config/MiniJson`，**不 import `android.*`**，可 JVM 单测；文件 `filesDir/schedule.json`，`schemaVersion = 1`，原子写（`.tmp` → `flush` + `fd.sync()` → `rename`），损坏回退备份 `schedule.json.bad-<epochMillis>`。
+
+**触发语义（qa-build 按此写测试）**
+
+| 情形 | 行为 |
+|---|---|
+| `now < remindAtMillis` | 等到 `remindAtMillis` → 推提前提醒 → `REMINDED` |
+| `remindAtMillis <= now < openAtMillis` | **立即补一次提前提醒**（只推一次，不重复） |
+| `now >= openAtMillis`（服务重建/创建时已过点） | **直接执行提交**（catch-up），不再提醒 |
+| 提交成功 / 失败 | `DONE_OK` / `DONE_FAIL`（结果落盘 + 通知） |
+| 用户取消 | `CANCELLED`（终态） |
+
+**提前量边界**：`0` → 提醒时刻 = 开放时刻；负值 → clamp 到 `0`；`> 1440` → clamp 到 `1440`。
+
+### 13.3 为什么用 `specialUse` 而不是 `dataSync`
+
+| 类型 | 结论 |
+|---|---|
+| `dataSync` | **不用**。语义是「数据同步/上传下载」；且 Android 15+ 对 `dataSync` 前台服务有**每日累计时长上限**（约 6 小时）——我们的任务可能数小时甚至数天后才触发一次，长挂起会被系统掐断，用途声明也不实 |
+| `shortService` | 不用：只适合分钟级一次性工作，覆盖不了「等待开放时间」 |
+| **`specialUse`** | **采用**。清单 `android:foregroundServiceType="specialUse"` + `<property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE" android:value="scheduled_survey_submission"/>`；API 34+ 启动时用 `FOREGROUND_SERVICE_TYPE_SPECIAL_USE`。这是「不适用既有分类的合法前台用途」的标准做法，语义如实 |
+
+### 13.4 生命周期与降级
+- `START_STICKY`；`onStartCommand` 启动时**从持久化恢复任务**（`FileScheduledTaskStore.load()`）。
+- **启动失败不得崩 App**（`SecurityException` / `ForegroundServiceStartNotAllowedException` 等）→ 降级为普通后台协程 + 通知，并在 UI 显式反馈「自动提交可能不准时」。
+- 权限：`FOREGROUND_SERVICE`、`FOREGROUND_SERVICE_SPECIAL_USE`、`POST_NOTIFICATIONS`（Android 13+ 运行时申请）、`WAKE_LOCK`（到点执行期间短时持有）。
+- 通知渠道 3 条：任务常驻 / 提前提醒 / 结果（含「需要人机验证」）。
+- 到点遇验证码：**只推通知、不弹界面**（用户已确认）。
+
+### 13.5 被国产 ROM 杀掉的风险与兜底
+国产 ROM（EMUI / MagicOS / MIUI 等）会激进清理后台，**即使有前台通知**也可能被杀。缓解（**不承诺 100% 准时**）：
+1. 常驻通知 + 引导用户加白名单（跳系统电池优化/自启动设置）；
+2. `START_STICKY` 被杀后重建 → 恢复任务 → **catch-up**（已过开放时间立即提交）；
+3. UI 如实提示「服务可能被系统回收，建议保持 App 在最近任务中」；
+4. 降级路径（普通后台协程）保证 App 进程存活期间仍能触发。
+
+### 13.6 只允许 1 个任务
+`FileScheduledTaskStore` 为**单任务**语义：`save(task)` **覆盖**现有任务；UI 新建时若已有任务，必须先确认覆盖（或先 `clear()`）。同一时刻只有 1 个等待协程、1 条常驻通知。
+
+### 13.7 边界：不做 `BOOT_COMPLETED`
+**刻意不注册** `RECEIVE_BOOT_COMPLETED`、不监听开机广播。后果（**必须写进交付文档**）：**设备重启后定时任务不会自动恢复**，用户需重新打开 App 才会恢复调度。理由：不再多要一个权限、避免开机自启带来的后台启动限制与厂商拦截，符合「只做前台常驻服务」的用户决策。
+
+---
+
+## 14. 与冻结契约的关系
 
 - 本文件**不重复**签名、schema、错误码逐字文案：全部以 `docs/API-CONTRACT.md` 为唯一真源。
 - 若本文件与契约冲突，**以契约为准**，并回写本文件（维护者：architect）。
@@ -388,3 +474,5 @@ https-only + 顶层导航白名单（仅 `*.wjx.cn`）、禁用文件访问/多�
 | 2026-09-22 | T14：URL 正则放宽为 wjx.cn 任意子域（`v.wjx.cn` 短链实测暴露缺陷）；业务码 22 补为服务端实测确认；新增 R12（`useAliVerify=0` ≠ 免验证，兜底为常规路径） | Lead / architect |
 | 2026-09-22 | T14/V6 修正：**撤回**「`useAliVerify=0` ≠ 免验证」结论（裸 22 实为 `ktimes=0` 风控）；`ktimes` 下限定为 `max(4,·)`（取已验证值 4）；补发 `rn`/`captchaVerifyParam`/`sceneId` 会把 10 变 7；R12 重写、§12.8 改为「纯接口已 E2E 成功」、§10 手工联调同步 | Lead / api-debug / architect |
 | 2026-09-22 | Lead 改判：**取消 `useAliVerify` 本地门控**（总是先试，避免假阴性）；`ktimes` 下限改为**已验证值 4**（`max(4,·)`，注意 0/1/2/3→4 会改变 jqsign）；§13.3 Cookie 基准改为**问卷 URL 的 origin**（`CookieHeader.originOf`，修复 `v.wjx.cn` 子域注入失效） | Lead / android-dev（证据）/ architect |
+| 2026-09-22 | **T18：新增 §13 定时提交与前台服务设计**（冻结签名、`specialUse` vs `dataSync` 理由、ROM 杀进程与 catch-up 兜底、单任务约束、**不做 BOOT_COMPLETED 的边界**）；原 §13 顺延为 §14；风险表新增 R13–R16 | Lead（冻结签名）/ architect |
+| 2026-09-22 | 用户决策：**不做预检提交**，§12.2 新增第 6 条原则（只做页面层读取 + 响应层判定，不发起额外探测请求） | 用户 / Lead / architect |

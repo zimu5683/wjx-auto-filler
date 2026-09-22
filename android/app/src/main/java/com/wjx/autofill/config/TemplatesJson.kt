@@ -279,12 +279,12 @@ object TemplatesJson {
 }
 
 /**
- * 最小 JSON 读写器（本文件私有，不外泄 API）。
+ * 最小 JSON 读写器（**internal**：同模块可复用，例如 schedule/ 的任务持久化；不对外暴露）。
  *
  * 支持 null / Boolean / Long / Double / String / Map / List；
  * 编码保持插入顺序，[encodePretty] 输出 2 空格缩进的稳定格式（契约 §4.4 写入节）。
  */
-private object MiniJson {
+internal object MiniJson {
 
     fun encodePretty(value: Any?, indent: String = "  "): String {
         val builder = StringBuilder()

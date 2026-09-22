@@ -60,7 +60,7 @@ public class SmokeTest {
 
         // ---------- 解析 fixture ----------
         String fx = args[0];
-        SurveyModel sample = WjxPageParser.INSTANCE.parse("https://www.wjx.cn/vm/Q0DQewW.aspx", read(fx + "/Q0DQewW-3q-text-captcha-enabled.html"), new HashMap<>());
+        SurveyModel sample = WjxPageParser.INSTANCE.parse("https://www.wjx.cn/vm/Q0DQewW.aspx", read(fx + "/Q0DQewW-3q-text-captcha-enabled.html"), new HashMap<>(), WjxTimeAdapter.INSTANCE);
         eq("parse.sample.title", sample.getTitle(), "测试");
         eq("parse.sample.qcount", sample.getQuestions().size(), 3);
         eq("parse.sample.q1type", sample.getQuestions().get(0).getType(), QuestionType.TEXT);
@@ -72,7 +72,7 @@ public class SmokeTest {
         check("parse.sample.submitUrl", sample.getSubmitUrl().contains("processjq.ashx?shortid=Q0DQewW"), sample.getSubmitUrl());
         check("parse.sample.sceneId.null", sample.getSceneId() == null, "sceneId=" + sample.getSceneId());
 
-        SurveyModel choice = WjxPageParser.INSTANCE.parse("https://www.wjx.cn/vm/rRESgvn.aspx", read(fx + "/rRESgvn-22q-choice.html"), new HashMap<>());
+        SurveyModel choice = WjxPageParser.INSTANCE.parse("https://www.wjx.cn/vm/rRESgvn.aspx", read(fx + "/rRESgvn-22q-choice.html"), new HashMap<>(), WjxTimeAdapter.INSTANCE);
         eq("parse.choice.qcount", choice.getQuestions().size(), 22);
         check("parse.choice.allChoice", choice.getQuestions().stream().allMatch(q -> q.getType() == QuestionType.SINGLE || q.getType() == QuestionType.MULTI), "types=" + choice.getQuestions().stream().map(SurveyQuestion::getType).distinct().toList());
         SurveyQuestion cq = choice.getQuestions().stream().filter(q -> q.getType() == QuestionType.SINGLE).findFirst().orElse(null);
@@ -81,7 +81,7 @@ public class SmokeTest {
         check("parse.choice.values", cq != null && cq.getOptions().get(0).getValue().matches("\\d+"), "v=" + (cq == null ? null : cq.getOptions().get(0).getValue()));
         check("parse.choice.useAliVerify.false", !choice.getUseAliVerify(), "useAliVerify=" + choice.getUseAliVerify());
 
-        SurveyModel mixed = WjxPageParser.INSTANCE.parse("https://www.wjx.cn/vm/hPyt0iq.aspx", read(fx + "/hPyt0iq-37q-text-single-multi.html"), new HashMap<>());
+        SurveyModel mixed = WjxPageParser.INSTANCE.parse("https://www.wjx.cn/vm/hPyt0iq.aspx", read(fx + "/hPyt0iq-37q-text-single-multi.html"), new HashMap<>(), WjxTimeAdapter.INSTANCE);
         eq("parse.mixed.qcount", mixed.getQuestions().size(), 37);
         check("parse.mixed.hasText", mixed.getQuestions().stream().anyMatch(q -> q.getType() == QuestionType.TEXT), "types");
         check("parse.mixed.hasSingle", mixed.getQuestions().stream().anyMatch(q -> q.getType() == QuestionType.SINGLE), "types");
@@ -134,7 +134,7 @@ public class SmokeTest {
             + "</div></fieldset></div>"
             + "<input type=\"hidden\" id=\"starttime\" value=\"2026/9/22 1:00:00\" />"
             + "</form></body></html>";
-        SurveyModel dd = WjxPageParser.INSTANCE.parse("https://www.wjx.cn/vm/AAAABBBB.aspx", synth, new HashMap<>());
+        SurveyModel dd = WjxPageParser.INSTANCE.parse("https://www.wjx.cn/vm/AAAABBBB.aspx", synth, new HashMap<>(), WjxTimeAdapter.INSTANCE);
         eq("dropdown.count", dd.getQuestions().size(), 1);
         eq("dropdown.type", dd.getQuestions().get(0).getType(), QuestionType.DROPDOWN);
         eq("dropdown.opts", dd.getQuestions().get(0).getOptions().size(), 2);
@@ -149,7 +149,7 @@ public class SmokeTest {
         List<kotlin.Pair<Integer, String>> submitPairs = pairs(1, "张三");
         SurveyModel noScene = new SurveyModel("https://www.wjx.cn/vm/Q0DQewW.aspx", "Q0DQewW", "测试", qs,
             "https://www.wjx.cn/joinnew/processjq.ashx?shortid=Q0DQewW", "nonce-abc", 4, "2026/9/22 1:00:00", 2,
-            new HashMap<String, String>(), false, null, null);
+            new HashMap<String, String>(), false, null, null, null, false);
         String bodyPlain = WjxSubmitRequest.INSTANCE.buildSubmitBody(noScene, submitPairs, null);
         eq("body.plain", bodyPlain, "submitdata=" + java.net.URLEncoder.encode("1$张三", "UTF-8"));
         check("body.plain.noToken", !bodyPlain.contains("captchaVerifyParam") && !bodyPlain.contains("sceneId"), bodyPlain);
@@ -158,13 +158,13 @@ public class SmokeTest {
         check("body.token.noScene", !bodyTok.contains("sceneId="), bodyTok);
         SurveyModel withScene = new SurveyModel("https://www.wjx.cn/vm/Q0DQewW.aspx", "Q0DQewW", "测试", qs,
             "https://www.wjx.cn/joinnew/processjq.ashx?shortid=Q0DQewW", "nonce-abc", 4, "2026/9/22 1:00:00", 2,
-            new HashMap<String, String>(), false, "q0hcfsca", SceneIdSource.CAPTCHA_JS);
+            new HashMap<String, String>(), false, "q0hcfsca", SceneIdSource.CAPTCHA_JS, null, false);
         String bodyBoth = WjxSubmitRequest.INSTANCE.buildSubmitBody(withScene, submitPairs, "tok-123");
         check("body.token.scene", bodyBoth.contains("captchaVerifyParam=tok-123") && bodyBoth.contains("sceneId=q0hcfsca"), bodyBoth);
         String url = WjxSubmitRequest.INSTANCE.buildSubmitUrl(noScene);
         check("url.params", url != null && url.contains("starttime=") && url.contains("&ktimes=4") && url.contains("&jqnonce=nonce-abc") && url.contains("&jqsign=") && url.contains("&capt=2") && url.contains("&t="), String.valueOf(url));
         check("url.jqsign", url.contains("jqsign=" + java.net.URLEncoder.encode(WjxSubmitCodec.INSTANCE.jqSign("nonce-abc", 4), "UTF-8").replace("+", "%20")), String.valueOf(url));
-        SurveyModel badUrl = new SurveyModel("x", "Q0DQewW", "t", qs, "http://evil.example.com/x", "n", 0, "", null, new HashMap<String, String>(), false, null, null);
+        SurveyModel badUrl = new SurveyModel("x", "Q0DQewW", "t", qs, "http://evil.example.com/x", "n", 0, "", null, new HashMap<String, String>(), false, null, null, null, false);
         check("url.invalid", WjxSubmitRequest.INSTANCE.buildSubmitUrl(badUrl) == null, "invalid url");
 
         // ---------- sceneId 解析（页面 / JS / 失败 / 不启用 四分支，纯函数） ----------
@@ -201,40 +201,94 @@ public class SmokeTest {
         // ---------- ktimes 下限 4（T11 实测：ktimes=0 → 裸码 22；ktimes=4 → 成功码 10；1 未验证） ----------
         SurveyModel zeroK = new SurveyModel("https://www.wjx.cn/vm/Q0DQewW.aspx", "Q0DQewW", "测试", qs,
             "https://www.wjx.cn/joinnew/processjq.ashx?shortid=Q0DQewW", "nonce-abc", 0, "2026/9/22 1:00:00", 2,
-            new HashMap<String, String>(), false, null, null);
+            new HashMap<String, String>(), false, null, null, null, false);
         String urlZero = WjxSubmitRequest.INSTANCE.buildSubmitUrl(zeroK);
         check("url.ktimes.min4", urlZero != null && urlZero.contains("&ktimes=4") && !urlZero.contains("&ktimes=0"), String.valueOf(urlZero));
         check("url.ktimes.min4.sign", urlZero != null && urlZero.contains("jqsign=" + java.net.URLEncoder.encode(WjxSubmitCodec.INSTANCE.jqSign("nonce-abc", 4), "UTF-8").replace("+", "%20")), String.valueOf(urlZero));
         SurveyModel threeK = new SurveyModel("https://www.wjx.cn/vm/Q0DQewW.aspx", "Q0DQewW", "测试", qs,
             "https://www.wjx.cn/joinnew/processjq.ashx?shortid=Q0DQewW", "nonce-abc", 3, "2026/9/22 1:00:00", 2,
-            new HashMap<String, String>(), false, null, null);
+            new HashMap<String, String>(), false, null, null, null, false);
         String urlThree = WjxSubmitRequest.INSTANCE.buildSubmitUrl(threeK);
         check("url.ktimes.floor4", urlThree != null && urlThree.contains("&ktimes=4") && !urlThree.contains("&ktimes=3"), String.valueOf(urlThree));
         SurveyModel sevenK = new SurveyModel("https://www.wjx.cn/vm/Q0DQewW.aspx", "Q0DQewW", "测试", qs,
             "https://www.wjx.cn/joinnew/processjq.ashx?shortid=Q0DQewW", "nonce-abc", 7, "2026/9/22 1:00:00", 2,
-            new HashMap<String, String>(), false, null, null);
+            new HashMap<String, String>(), false, null, null, null, false);
         String urlSeven = WjxSubmitRequest.INSTANCE.buildSubmitUrl(sevenK);
         check("url.ktimes.passthrough", urlSeven != null && urlSeven.contains("&ktimes=7"), String.valueOf(urlSeven));
 
         // ---------- URL 正则：允许 wjx.cn 任意子域（契约 T14） ----------
-        SurveyModel subV = WjxPageParser.INSTANCE.parse("https://v.wjx.cn/vm/AAAABBBB.aspx", synth, new HashMap<>());
+        SurveyModel subV = WjxPageParser.INSTANCE.parse("https://v.wjx.cn/vm/AAAABBBB.aspx", synth, new HashMap<>(), WjxTimeAdapter.INSTANCE);
         eq("url.subdomain.v", subV.getShortId(), "AAAABBBB");
-        SurveyModel subBare = WjxPageParser.INSTANCE.parse("https://wjx.cn/vm/AAAABBBB.aspx", synth, new HashMap<>());
+        SurveyModel subBare = WjxPageParser.INSTANCE.parse("https://wjx.cn/vm/AAAABBBB.aspx", synth, new HashMap<>(), WjxTimeAdapter.INSTANCE);
         eq("url.bare.domain", subBare.getShortId(), "AAAABBBB");
-        SurveyModel subDash = WjxPageParser.INSTANCE.parse("https://my-survey.wjx.cn/vm/AAAABBBB.aspx?q1=x#f", synth, new HashMap<>());
+        SurveyModel subDash = WjxPageParser.INSTANCE.parse("https://my-survey.wjx.cn/vm/AAAABBBB.aspx?q1=x#f", synth, new HashMap<>(), WjxTimeAdapter.INSTANCE);
         eq("url.subdomain.dash.query", subDash.getShortId(), "AAAABBBB");
         try {
-            WjxPageParser.INSTANCE.parse("http://v.wjx.cn/vm/AAAABBBB.aspx", synth, new HashMap<>());
+            WjxPageParser.INSTANCE.parse("http://v.wjx.cn/vm/AAAABBBB.aspx", synth, new HashMap<>(), WjxTimeAdapter.INSTANCE);
             check("url.http.rejected", false, "http 未被拒绝");
         } catch (Exception ex) {
             check("url.http.rejected", ex instanceof WjxException && SubmitErrorCode.URL.equals(((WjxException) ex).getCode()), String.valueOf(ex));
         }
         try {
-            WjxPageParser.INSTANCE.parse("https://evil.example.com/vm/AAAABBBB.aspx", synth, new HashMap<>());
+            WjxPageParser.INSTANCE.parse("https://evil.example.com/vm/AAAABBBB.aspx", synth, new HashMap<>(), WjxTimeAdapter.INSTANCE);
             check("url.foreign.rejected", false, "外域未被拒绝");
         } catch (Exception ex) {
             check("url.foreign.rejected", ex instanceof WjxException && SubmitErrorCode.URL.equals(((WjxException) ex).getCode()), String.valueOf(ex));
         }
+
+        // ---------- T16：开放时间适配器 + E_NOT_OPEN + needsCaptchaHint ----------
+        String notOpenHtml = read(fx + "/tfGAWU4-notopen.html");
+        String openHtml = read(fx + "/P2M09FG-open.html");
+        long nowMs = 1790034767873L; // 2026-09-22 前后
+        OpenTime tNotOpen = WjxTimeAdapter.INSTANCE.parse(notOpenHtml, nowMs);
+        check("time.notopen.known", tNotOpen instanceof OpenTime.Known, String.valueOf(tNotOpen));
+        if (tNotOpen instanceof OpenTime.Known) {
+            // 真实开放时间 = 2026-09-23 09:33 +08:00（文案 / left+nowTime 双证；qBeginDate 不是开放时间）
+            eq("time.notopen.value", ((OpenTime.Known) tNotOpen).getOpenAtMillis(), 1790127180000L);
+        }
+        check("time.notopen.closed", !WjxTimeAdapter.INSTANCE.isOpen(tNotOpen, nowMs), "应判未开放");
+        check("time.notopen.msg", WjxTimeAdapter.INSTANCE.notOpenMessage(tNotOpen).contains("2026-09-23 09:33"),
+            WjxTimeAdapter.INSTANCE.notOpenMessage(tNotOpen));
+        OpenTime tOpen = WjxTimeAdapter.INSTANCE.parse(openHtml, nowMs);
+        check("time.open.known", tOpen instanceof OpenTime.Known, String.valueOf(tOpen));
+        check("time.open.isOpen", WjxTimeAdapter.INSTANCE.isOpen(tOpen, nowMs), "应判已开放");
+        String textOnly = "<div id='divstarttime' left='1'>很抱歉，此问卷将于2026-09-23 09:33（北京时间）开放，请到时再进入此页面进行填写！</div>";
+        OpenTime tText = WjxTimeAdapter.INSTANCE.parse(textOnly, nowMs);
+        check("time.text.known", tText instanceof OpenTime.Known, String.valueOf(tText));
+        if (tText instanceof OpenTime.Known) {
+            eq("time.text.value", ((OpenTime.Known) tText).getOpenAtMillis(), 1790127180000L);
+        }
+        eq("time.beijing.format", WjxTimeAdapter.INSTANCE.beijingTextOf(1790127180000L), "2026-09-23 09:33");
+        // qBeginDate 单独存在时必须"不覆盖"未开放判定：仅时间戳 → 判为已开放（这是有意的兜底语义）
+        long afterOpen = 1790127180000L + 60_000L;
+        check("time.timestamp.only", WjxTimeAdapter.INSTANCE.isOpen(
+            WjxTimeAdapter.INSTANCE.parse("qBeginDate=\"1790040856347\"", afterOpen), afterOpen), "仅有时间戳时按其时间判定");
+        // left + nowTime 路径（无文案）
+        String leftOnly = "<div id='divstarttime' left='85054'><div id='countdownHtml'></div></div><script>var nowTime = \"2026-09-22 09:55:25\";</script>";
+        OpenTime tLeft = WjxTimeAdapter.INSTANCE.parse(leftOnly, nowMs);
+        check("time.left.known", tLeft instanceof OpenTime.Known, String.valueOf(tLeft));
+        if (tLeft instanceof OpenTime.Known) {
+            // left 与 nowTime 在页面渲染上有 1s 级误差，容差 ±2s
+            long delta = Math.abs(((OpenTime.Known) tLeft).getOpenAtMillis() - 1790127180000L);
+            check("time.left.value", delta <= 2000L, "left+nowTime 偏差 " + delta + "ms");
+        }
+        check("time.empty.unknown", WjxTimeAdapter.INSTANCE.parse("", nowMs) == OpenTime.Unknown.INSTANCE, "空 HTML 应 Unknown");
+        check("time.none.unknown", WjxTimeAdapter.INSTANCE.parse("<html>no date</html>", nowMs) == OpenTime.Unknown.INSTANCE, "无日期应 Unknown");
+        check("time.garbage.unknown", WjxTimeAdapter.INSTANCE.parse("qBeginDate=\"9999999999999999\"", nowMs) == OpenTime.Unknown.INSTANCE, "脏数据应 Unknown");
+        check("time.unknown.isOpen", WjxTimeAdapter.INSTANCE.isOpen(OpenTime.Unknown.INSTANCE, nowMs), "Unknown 必须视为可尝试");
+        try {
+            WjxPageParser.INSTANCE.parse("https://v.wjx.cn/vm/tfGAWU4.aspx", notOpenHtml, new HashMap<>(), WjxTimeAdapter.INSTANCE);
+            check("parser.notopen", false, "未抛 E_NOT_OPEN");
+        } catch (Exception ex) {
+            check("parser.notopen",
+                ex instanceof WjxException && SubmitErrorCode.NOT_OPEN.equals(((WjxException) ex).getCode())
+                    && ((WjxException) ex).getMessage().contains("2026-09-23 09:33"),
+                String.valueOf(ex));
+        }
+        SurveyModel openModel = WjxPageParser.INSTANCE.parse("https://v.wjx.cn/vm/P2M09FG.aspx", openHtml, new HashMap<>(), WjxTimeAdapter.INSTANCE);
+        eq("parser.open.openAt", openModel.getOpenAtMillis(), 1790034767873L);
+        eq("parser.open.hint", openModel.getNeedsCaptchaHint(), false);
+        eq("parser.sample.hint", sample.getNeedsCaptchaHint(), true);
 
         System.out.println("\n===== PASS=" + pass + " FAIL=" + fail + " =====");
         if (fail > 0) System.exit(1);
