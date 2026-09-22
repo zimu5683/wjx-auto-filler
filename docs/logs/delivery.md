@@ -106,11 +106,23 @@ qa-build 产出 dist/wjx-autofill-1.0.0-universal.apk（6,138,222 B）+ .sha256 
 
 **最终交付判定**：仓库可访问（public）+ 两个 Release 各含 APK 与 sha256 + 三份文档齐全且命令实测可复现 → **T7 达成**。
 
-### 待办（第二阶段续：v1.0.1）
+## 2026-09-22 08:05–09:25　第三阶段：v1.0.2（叙事两次反转后发布）
 
-- [ ] 领取 task-7（task-6 完成后 `team_task_update(claim)`）
-- [ ] 核对 AppUpdater 仓库常量与 UI 文案，回填 USAGE.md 实际按钮名
-- [ ] `gh repo create zimu5683/wjx-auto-filler --public` + push main
-- [ ] Release v1.0.0（`wjx-autofill-1.0.0-universal.apk` + `.sha256`）
-- [ ] 配合 lead/qa-build 发 v1.0.1（验证应用内更新链路）
-- [ ] `curl -s .../releases/latest` 校验 `tag_name` 与 `assets[].browser_download_url` 非空
+| 时间 | 动作 | 证据 | 结果 |
+| --- | --- | --- | --- |
+| 08:05 | 接到 task-14（T15 发布 v1.0.2），先做文档阶段 | `team_task_get` | task-14 blocked_by task-12，先改文档 |
+| 08:12 | 口径修正第 1 轮 | 新样本 `v.wjx.cn/vm/P2M09FG.aspx`、`useAliVerify=0`、实测裸码 `22` | commit `780b631`/`8021373`：三处 shortId 只认 `www.` → 文档写「服务端当次判定」 |
+| 08:31 | **口径反转 #1**：V6 单变量 A/B | `11-v6-response.txt`：`ktimes: 0→4` 使同一问卷从裸 `22` 变 `10〒/wjx/join/complete.aspx?joinid=127844297308` | commit `0dbd70a`：`useAliVerify=0` **可纯接口成功**；裸 22 是 `ktimes=0` 风控指纹 |
+| 08:45 | **口径反转 #2**：下限与门控 | 契约 §5.3/§6.4 定 `max(4,·)`；本地 `useAliVerify` 门控取消 | commit `6672490`：文档改 `max(4, 页面值)`、改为「总是先发一次提交，仅响应 7/22 触发兜底」 |
+| 08:50 | 实现核对（防止文档写空话） | `WjxSubmitter.kt:106 maxOf(4, m.ktimes)`、`:120-130` 无令牌不带校验字段、`:40-41` 无本地门控；三处正则均为 `([A-Za-z0-9-]+\.)*wjx\.cn` | 文档与实现一致 |
+| 09:02 | v1.0.2 出包 + 独立复验四项 | `sha256sum -c` OK（`8c0c4758…`）；apksigner `CN=WJX AutoFill`；4 ABI×2 .so；badging `1.0.2/10002` + minSdk 24 | VERIFY-REPORT：ALL PASS(20/0/0)；三版签名指纹完全相同 |
+| 09:05 | 板子阻塞 | task-12 未结项 → task-14 `claim` 被拒 | 上报 Lead，由 Lead 代结 task-12 |
+| 09:10 | **push 失败 → 定位网络问题** | `git push` 挂起；`curl https://github.com` 25s 超时；`api.github.com` 0.37s 正常 | 非凭据问题：`credential.https://github.com.helper=!gh auth git-credential` 已配置 |
+| 09:14 | 找到可用路由并自建代理 | `curl --resolve github.com:443:140.82.112.3` → 200（DNS 解析的 20.205.243.166 超时）；`$TMPDIR/gh-proxy2.mjs` 本地 CONNECT 代理 → 140.82.112.3:443 | `git -c http.proxy=http://127.0.0.1:8901 push` 成功（TLS 端到端，仅绕过坏路由） |
+| 09:18 | push main + tag | `d5fc12a..ecee214 main`；tag `v1.0.2` → `ecee214` | 远端 main = ecee214 |
+| 09:20 | 发布 Release | `gh release create v1.0.2 dist/… --verify-tag --notes-file` | https://github.com/zimu5683/wjx-auto-filler/releases/tag/v1.0.2 |
+| 09:21 | 三项校验 | 匿名 `curl .../releases/latest` | `tag_name="v1.0.2"`；两条 `browser_download_url` 非空；APK digest = `sha256:8c0c4758…` **与本地冻结一致**；签名与 v1.0.0/v1.0.1 同源 |
+
+**本机网络事实（复现用）**：`github.com` 当前 DNS 解析到 `20.205.243.166`（不可达），
+而 `140.82.112.3` / `140.82.114.3` 可达；`api.github.com` 始终正常（gh CLI 全部可用）。
+因此 git 推送需要本地 CONNECT 代理（`gh-proxy2.mjs`，指向可达 IP），代理只是转发字节、TLS 仍端到端校验。
