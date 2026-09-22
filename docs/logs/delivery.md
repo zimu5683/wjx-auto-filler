@@ -181,5 +181,26 @@ qa-build 产出 dist/wjx-autofill-1.0.0-universal.apk（6,138,222 B）+ .sha256 
 需真机验证「连续加 8 条是否全部可见可编辑、整页可滚、无内嵌滚动条」；
 另 `SurveyStatus.fromModel()` 修复了 T16 遗留的 `openAt` 传 null（顶部状态条此前从未真正显示开放状态）。
 
-**最终交付序列**：v1.0.0 → v1.0.1 → v1.0.2 → v1.0.3（历史）→ v1.0.4 → v1.0.5 → **v1.0.6（当前最终）**，
+**交付序列**：v1.0.0 → v1.0.1 → v1.0.2 → v1.0.3（历史）→ v1.0.4 → v1.0.5 → **v1.0.6**，
 七版共用同一把 release 签名（`edcce56e…`），应用内更新与覆盖安装链路完整。
+
+## 2026-09-22 18:05–19:20　第七阶段：v1.0.7（未开放问卷自动填时间 + 解析失败收敛状态）
+
+| 时间 | 动作 | 证据 | 结果 |
+| --- | --- | --- | --- |
+| 18:05 | 接 task-35（T36 发布 v1.0.7） | task-31/32 pending、task-33 in_progress | 先做文档阶段，不空等 |
+| 18:20 | 观察修复落地 | `WjxErrors.kt:21` `WjxException.openAtMillis`（additive，仅 E_NOT_OPEN 且解析到时间时非空）；`WjxSurveyClient.kt:326-331/364` 未开放短路携带结构化时间 | — |
+| 18:23 | **跨组解阻塞（我主动做的一件事）** | android-dev 的 `// TODO(S1 落盘后)` 卡在等 api-debug 的字段，而该字段**已在磁盘上** → 发消息附 file:line 证据 | 5 分钟后 `MainActivity:620` 改为 `val openAt = wjx.openAtMillis`，TODO 解除 |
+| 18:35 | 文档四条 | commit `0b38507` / `362b382` / `64711a3`：未开放也自动填入开放时间、状态条「尚未开放，将于 … 开放」、**解析/提交两处错误表补 E_NOT_OPEN 行**、**北京时间 GMT+08:00 口径**、按钮置灰但手动路径仍可用 | 完成 |
+| 18:46 | v1.0.7 出包 + 五项独立复验 | sha256 `7a809d8c…`；**八版签名同源**；4 ABI×2 .so；badging 1.0.7/10007；**530 单测 0 失败**；lintRelease **0 Error**（18:46:52） | 全部通过 |
+| 18:48 | 板子阻塞 → 上报 | task-34 仍 pending → task-35 `claim` 被拒 | Lead 代结 task-34 |
+| 18:55 | claim → commit → **push 失败** | `fatal: unable to access '…': Failed to connect to github.com:443 after 129246 ms` | **老问题复现**：github.com 不可达、api.github.com 正常 |
+| 18:57 | 网络定位 + 本地代理 | `curl --resolve`：140.82.112.3 = 200、20.27.177.113 = 200；140.82.114.3 / 20.205.243.166 = 000 → 起 `gh-proxy2.mjs`（127.0.0.1:8901，只转发字节、TLS 端到端） | push main + tag 成功（main = 9e853b6；tag 68316565 → 9e853b6） |
+| 19:00 | 发布 Release | `gh release create v1.0.7 … --verify-tag --notes-file` | https://github.com/zimu5683/wjx-auto-filler/releases/tag/v1.0.7 |
+| 19:02 | 四项校验 | 匿名 `releases/latest` + apksigner 八版对比 | latest=v1.0.7；两条 URL 非空；APK digest = `sha256:7a809d8c…` **与本地冻结一致**；八版证书 SHA-256 全为 `edcce56e…` |
+| 19:05 | 补提交剩余项 | commit `a8fa0d3`（qa-build 日志）→ 走代理 push | 远端 main = a8fa0d3（与本地一致） |
+| 19:12 | CI | `gh run view 35719244835` | **completed / success** |
+| 19:15 | 清理 | `job_kill` 本地代理进程 | 已结束（不留后台进程） |
+
+**最终交付序列**：v1.0.0 → v1.0.1 → v1.0.2 → v1.0.3（历史，CI 红已知）→ v1.0.4 → v1.0.5 → v1.0.6 → **v1.0.7（当前最终）**，
+八版共用同一把 release 签名（`edcce56e…`），应用内更新与覆盖安装链路完整。
