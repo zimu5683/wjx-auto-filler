@@ -242,6 +242,7 @@
                 android:padding="12dp">
 
                 <TextView
+                    android:id="@+id/mappingTitle"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:text="@string/label_mapping"
@@ -314,11 +315,16 @@
                         android:textSize="12sp" />
                 </LinearLayout>
 
-                <androidx.recyclerview.widget.RecyclerView
+                <!--
+                    动态填充的 LinearLayout：高度随条目自然增长，由外层 ScrollView 滚动。
+                    历史 bug：这里曾是 ScrollView 内的 RecyclerView（wrap_content + 未 setHasFixedSize），
+                    条目超过约 4 行后不会可靠重新测量 → 多出的行既不可见也不可滚。
+                -->
+                <LinearLayout
                     android:id="@+id/pairList"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:nestedScrollingEnabled="false"
+                    android:orientation="vertical"
                     android:visibility="gone" />
 
                 <LinearLayout

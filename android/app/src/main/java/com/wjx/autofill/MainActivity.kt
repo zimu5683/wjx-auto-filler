@@ -232,9 +232,8 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun setupLists() {
-        pairAdapter = PairAdapter { pairs -> state.updateGroupPairs(pairs) }
-        binding.pairList.layoutManager = LinearLayoutManager(this)
-        binding.pairList.adapter = pairAdapter
+        // 映射列表改为动态填充的 LinearLayout（原 RecyclerView 在 ScrollView 内不增长，见 PairAdapter 注释）。
+        pairAdapter = PairAdapter(binding.pairList) { pairs -> state.updateGroupPairs(pairs) }
 
         questionAdapter = QuestionAdapter { question -> fillField(question.topic.toString()) }
 
@@ -320,7 +319,7 @@ class MainActivity : AppCompatActivity() {
         binding.linkStatus.text = state.linkStatus
         binding.templateStatus.text = state.templateStatus
         renderGroups()
-        pairAdapter.submit(state.group().pairs)
+        pairAdapter.setPairs(state.group().pairs)
         renderPairList()
         renderResults()
         renderSurveyStatus()
@@ -394,9 +393,11 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun renderPairList() {
-        val hasRows = pairAdapter.itemCount > 0
-        binding.emptyState.visibility = if (hasRows) View.GONE else View.VISIBLE
-        binding.pairList.visibility = if (hasRows) View.VISIBLE else View.GONE
+        val count = pairAdapter.itemCount
+        // 标题显示条数，让「没有上限」一眼可见（用户曾以为只能填 4 行）。
+        binding.mappingTitle.text = getString(R.string.label_mapping_count, count)
+        binding.emptyState.visibility = if (count > 0) View.GONE else View.VISIBLE
+        binding.pairList.visibility = if (count > 0) View.VISIBLE else View.GONE
     }
 
     private fun renderGroups() {
@@ -412,7 +413,7 @@ class MainActivity : AppCompatActivity() {
                 if (position == state.groupIndex) return
                 state.updateGroupPairs(pairAdapter.currentPairs())
                 state.groupIndex = position
-                pairAdapter.submit(state.group().pairs)
+                pairAdapter.setPairs(state.group().pairs)
                 renderPairList()
             }
 
@@ -448,7 +449,7 @@ class MainActivity : AppCompatActivity() {
         state.current = state.current.copy(groups = groups)
         state.groupIndex = groups.size - 1
         renderGroups()
-        pairAdapter.submit(state.group().pairs)
+        pairAdapter.setPairs(state.group().pairs)
         renderPairList()
     }
 
@@ -484,7 +485,7 @@ class MainActivity : AppCompatActivity() {
                 state.current = state.current.copy(groups = groups)
                 state.groupIndex = index.coerceIn(0, groups.size - 1)
                 renderGroups()
-                pairAdapter.submit(state.group().pairs)
+                pairAdapter.setPairs(state.group().pairs)
                 renderPairList()
             }
             .setNegativeButton(R.string.action_cancel, null)
@@ -582,10 +583,22 @@ class MainActivity : AppCompatActivity() {
                     }
                     result.onSuccess { model ->
                         state.survey = model
-                        state.linkStatus = getString(
-                            R.string.parse_success, model.title, model.questions.size,
+                        // 用户要求：解析到开放时间就**强制覆盖**输入框；解析不到则保留原值并提示。
+                        val parsedOpenAt = model.openAtMillis
+                        binding.openAtInput.setText(
+                            ScheduleTime.applyParsedOpenTime(
+                                binding.openAtInput.text?.toString(),
+                                parsedOpenAt,
+                            ).orEmpty(),
                         )
+                        state.linkStatus = if (parsedOpenAt == null) {
+                            getString(R.string.parse_success, model.title, model.questions.size) +
+                                "；" + getString(R.string.parse_no_open_time)
+                        } else {
+                            getString(R.string.parse_success, model.title, model.questions.size)
+                        }
                         renderLink()
+                        renderSurveyStatus()
                         showQuestionPicker(model)
                     }.onFailure { throwable ->
                         val human = (throwable as? WjxException)?.message
@@ -820,9 +833,9 @@ class MainActivity : AppCompatActivity() {
         if (targetIndex >= 0 && targetIndex != state.groupIndex) {
             state.groupIndex = targetIndex
             renderGroups()
-            pairAdapter.submit(state.group().pairs)
+            pairAdapter.setPairs(state.group().pairs)
         }
-        pairAdapter.highlightFields(fields)
+        pairAdapter.highlightUnmatched(fields)
         renderPairList()
     }
 

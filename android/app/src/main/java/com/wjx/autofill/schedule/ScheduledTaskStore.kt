@@ -72,6 +72,15 @@ object ScheduleTime {
 
     fun format(millis: Long): String =
         SimpleDateFormat(PATTERN, Locale.CHINA).format(Date(millis))
+
+    /**
+     * 解析结果 → 开放时间输入框的值（纯函数，可 JVM 单测）。
+     *
+     * 用户明确要求：**每次解析成功且解析到开放时间就强制覆盖**（以页面为准，避免沿用旧值）；
+     * 解析不到（null / <= 0）→ **保留原值**（用户手填的不能被清掉）。
+     */
+    fun applyParsedOpenTime(current: String?, parsed: Long?): String? =
+        if (parsed != null && parsed > 0L) format(parsed) else current
 }
 
 /** 任务持久化接口（**冻结签名**）。 */

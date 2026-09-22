@@ -29,6 +29,7 @@
 
     <!-- 字段映射双栏 -->
     <string name="label_mapping">字段映射</string>
+    <string name="label_mapping_count">字段映射（%1$d 条）</string>
     <string name="label_target_column">目标字段（题号 / 题干关键词）</string>
     <string name="label_content_column">填充内容</string>
     <string name="hint_target_column">如 1 或 q1 或 姓名</string>
@@ -91,6 +92,7 @@
     <string name="parse_success">已解析：%1$s（共 %2$d 题）</string>
     <string name="parse_failed">解析失败：%1$s</string>
     <string name="parse_running">正在解析问卷…</string>
+    <string name="parse_no_open_time">未解析到开放时间，请手动填写</string>
 
     <!-- 扫码页 -->
     <string name="scan_title">扫码识别问卷链接</string>

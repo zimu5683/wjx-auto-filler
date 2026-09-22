@@ -200,3 +200,28 @@
 - `TemplateLibrary` JVM 断言 **19/19 通过**（不同名 3 次→3 个；同名 2 次→1 个且覆盖+保留 id；trim 同名；大小写敏感；delete 语义；findByName；空名 IAE）
 - 只读一致性：XML 19 个 well-formed、布局/字符串/drawable 引用零缺失
 - 已知无害残留：4 条未被引用的字符串（`hint_open_at`/`hint_remind_minutes`/`schedule_saved`/`schedule_service_stopped`，均为 T17 遗留，非本次改动引入）；**为降低出包前风险未清理**
+---
+
+## 17:0x task-27（T28）映射列表改造 + 开放时间自动填入
+
+### 1) 「只能看到 4 行」真 UI bug（根因：ScrollView 内的 RecyclerView）
+- `activity_main.xml`：`pairList` 由 `RecyclerView`（wrap_content + nestedScrollingEnabled=false）改为**动态填充的 LinearLayout**；映射标题加 id `mappingTitle`
+- `ui/PairAdapter.kt` **重写**为 LinearLayout 控制器（`container: LinearLayout` + `onChanged`）：
+  - 公开方法按 Lead 要求命名并全部存在：`setPairs/currentPairs/addRow/deleteSelected/selectedCount/itemCount/highlightUnmatched/clearAll`（另有 `removeAt/firstBlankFieldIndex/setFieldAt`）
+  - `setPairs`/`highlightUnmatched` 即原 `submit`/`highlightFields` 的新名字
+  - **TextWatcher 每行只挂一次**（行视图随重建重建，不会叠加 —— 保留 v1.0.4 修过的那条）
+  - 勾选/删除选中/清空全部/高亮未匹配全部保留；**聚焦时 `requestRectangleOnScreen`** 把靠下的行滚进可视区
+  - `binding` 抑制标志防止 setText 触发 watcher 递归
+- `MainActivity`：构造改为 `PairAdapter(binding.pairList) { ... }`，删除 `layoutManager`/`adapter` 两行；`submit(`→`setPairs(`（6 处）、`highlightFields(`→`highlightUnmatched(`（1 处）；`renderPairList()` 顺带把标题写成「字段映射（N 条）」让无上限一眼可见
+- 新增字符串 `label_mapping_count`
+
+### 2) 开放时间每次解析强制覆盖
+- `schedule/ScheduledTaskStore.kt` 的 `ScheduleTime` 新增**纯函数** `applyParsedOpenTime(current: String?, parsed: Long?): String?`：解析到（>0）→ `format(parsed)` 强制覆盖；解析不到 → 返回 `current`（用户手填不丢）
+- `MainActivity.parseSurvey()` 成功分支：写入 `openAtInput`；`openAtMillis == null` 时在 linkStatus 追加「未解析到开放时间，请手动填写」（新增字符串 `parse_no_open_time`），并调用 `renderSurveyStatus()`
+- 顺带**完成 T16 接线**：`SurveyStatus.fromModel()` 原先把 parsed 传 null（TODO），现改为读 `model?.openAtMillis` → 顶部状态条现在能真实显示「已开放 / 尚未开放 / 解析不到」
+
+### 验证
+- glob 全量离线编译（30 个 .kt）：**ANDROID SOURCE COMPILE OK**
+- `applyParsedOpenTime` JVM 断言 **13/13 通过**（覆盖/保留/0与负值/null/往返/非法输入/用户手填不丢）
+- 只读核查：`pairList` 控件类型 = **LinearLayout**；MainActivity 中 `pairList.layoutManager|adapter` = **0**；`mappingTitle` 已接线；Lead 列的 8 个 PairAdapter 方法**全部存在**；XML 19 / Kotlin 30，资源引用零缺失
+- 说明：布局里另有 2 处 RecyclerView（结果区 `resultList`、题目清单 `questionList`），它们不在 ScrollView 内，无此问题，保持不动

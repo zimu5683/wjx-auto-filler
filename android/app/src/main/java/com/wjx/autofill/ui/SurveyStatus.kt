@@ -31,14 +31,15 @@ data class SurveyStatus(
             return SurveyStatus(state = state, openAtMillis = openAt)
         }
 
-        /**
-         * 从解析结果推导。**这是 T16 的唯接线点**：
-         * api-debug 的 SurveyModel.openAtMillis 落地后，把 [parsedOpenAt] 从 null 改成 model?.openAtMillis 即可。
-         */
+        /** 从解析结果推导：优先页面解析出的开放时间（T16 的 SurveyModel.openAtMillis）。 */
         fun fromModel(
             model: SurveyModel?,
             scheduledOpenAtMillis: Long?,
             now: Long,
-        ): SurveyStatus = of(parsedOpenAtMillis = null, scheduledOpenAtMillis = scheduledOpenAtMillis, now = now)
+        ): SurveyStatus = of(
+            parsedOpenAtMillis = model?.openAtMillis,
+            scheduledOpenAtMillis = scheduledOpenAtMillis,
+            now = now,
+        )
     }
 }

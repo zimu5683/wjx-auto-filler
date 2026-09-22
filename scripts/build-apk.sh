@@ -154,6 +154,13 @@ write_report() { # write_report <结论>
         echo "   （可机械审查的部分已由第 8 节静态审查覆盖：脚本固定化、无 JS 桥、Cookie 双向注入的纯逻辑有单测。）"
         echo "3. 相机实时扫码与相册选图解码（QrDecoder 的核心解码逻辑已由 QrDecodeTest 用真实截图夹具覆盖）。"
         echo "4. 应用内更新：下载 APK → FileProvider → 系统安装器 → 覆盖安装（需与正式签名包同签名）。"
+        echo "5. **字段映射列表增长行为（v1.0.6 起）**：连续添加 8 条字段映射后，8 行必须**全部可见、可编辑**，"
+        echo "   且页面能正常整体滚动（**不得出现内嵌滚动条**或列表被截断）；删除/清空后布局正常收缩。"
+        echo "   说明：映射行行为**本轮无 JVM 单测覆盖** —— PairAdapter 依赖 android.view（容器 + inflate），"
+        echo "   且本次修复的问题是「ScrollView 内嵌 RecyclerView 不重新测量」这类**真实布局测量**行为；"
+        echo "   Robolectric 不做真实测量、测不到该类问题，故按 Lead 裁定**不引入**（如实标注，不假装覆盖）。"
+        echo "   纯逻辑部分（同名 upsert/删除、applyParsedOpenTime）已由 config/ 与 schedule/ 的 JVM 单测覆盖。"
+        echo "6. 开放时间自动填入：选择问卷后开放时间自动带出；用户手改后再触发解析不得覆盖用户输入。"
         echo
         echo "## 复现命令"
         echo
