@@ -13,8 +13,8 @@
 | 应用名 / 包名 | 问卷自动填表 / `com.wjx.autofill` |
 | 团队 | Lead + 5 个 Agent：architect（方案设计）、api-debug（接口调试）、android-dev（安卓开发）、qa-build（测试打包）、delivery（交付上传） |
 | 仓库 | https://github.com/zimu5683/wjx-auto-filler （public） |
-| Release | v1.0.0 / v1.0.1 / v1.0.2 / v1.0.3 / v1.0.4 / v1.0.5 / **v1.0.6（最终交付）** |
-| 最终 APK | `dist/wjx-autofill-1.0.6-universal.apk`（6175666 B，sha256 `6b5672a118dc8cff…`） |
+| Release | v1.0.0 / v1.0.1 / v1.0.2 / v1.0.3 / v1.0.4 / v1.0.5 / v1.0.6 / **v1.0.7（最终交付）** |
+| 最终 APK | `dist/wjx-autofill-1.0.7-universal.apk`（6175666 B，sha256 `7a809d8c8f094c66…`） |
 | 功能范围 | 二维码识别 → 问卷星纯接口自动填表 → 自定义字段映射（**支持超量预填**）→ 模板保存/载入/删除 → 应用内更新 → 定时自动提交（前台常驻）→ 人机验证检测（**直接进入验证页**） |
 | 签名密钥 | `~/wjx-release/wjx-release.keystore`（**不入库**），证书 SHA-256 `ED:CC:E5:6E:F5:D1:50:CC:75:97:22:3D:DB:43:80:BB:CE:32:87:56:AB:B4:A8:BD:13:FF:BD:A8:7C:70:83:72` |
 
@@ -252,6 +252,46 @@ android-dev 提出「`PairAdapter` 现在依赖 `android.view`，要不要引入
 3. 真正的验证只能靠真机。
 → 改为在 VERIFY-REPORT **如实标注**：「映射行显示/滚动行为本轮**无 JVM 单测覆盖**，需真机验证连续加 8 条是否全部可见可编辑」。**如实标注胜过假装覆盖。**
 qa-build 另补了可测的数据层：`EditorStateTest`（一次加 8 条全保留、删中间行保序等）+ `ScheduleTimeTest`（覆盖/保留两分支）。
+
+---
+
+## 4.8 第五轮：v1.0.7（解析未开放问卷的路径失效 —— 三缺陷叠加）
+
+用户实测：**解析未开放问卷时，开放时间显示出来了，但没填进「到点自动提交」**，且顶部状态条错报「已开放，可提交」。
+
+**关键**：这不是边缘情况 —— 用户的真实用法就是「**解析一份还没开放的问卷 → 设定时任务**」，而这条路径恰好走 `E_NOT_OPEN` **失败分支**，正好绕过了自动填入。
+
+### 三个缺陷叠加（均已定位到行）
+
+| # | 缺陷 | 后果 |
+|---|---|---|
+| 1 | `WjxSurveyClient` 抛 `E_NOT_OPEN` 时只给**格式化文案**，不带结构化 `openAtMillis` | UI 拿不到时间去填输入框 |
+| 2 | `parseSurvey()` 的 `onFailure` 分支**只改文字**，不收敛状态 | 不自动填入、不刷新状态条 |
+| 3 | `state.survey` **只在成功时赋值、失败时保留旧值** | 状态条显示**上一份问卷**的状态 → 明明未开放却报「已开放，可提交」 |
+
+### 修法与连带修复
+
+| 修 | 内容 |
+|---|---|
+| 引擎 | `WjxException` 增 additive `openAtMillis: Long? = null`（仅 E_NOT_OPEN 非空；message 文案逐字不变） |
+| 状态 | `EditorState.parsedOpenAtMillis`；`currentSurveyStatus()` 改读它，**不再依赖 `state.survey`** |
+| 分支 | 解析**三分支全部收敛**：成功 / E_NOT_OPEN（**同样自动填入**）/ 其他失败 → UNKNOWN |
+| **串号防护**（architect 发现） | `:880` 用 `state.survey?.cookies` 做验证码兜底注入 → 旧模型不清会把**上一份问卷的会话 cookie 注入本次提交**。新增纯函数 `ui/SurveySession.kt → surveyCookiesFor(model, currentUrl)`：URL 不一致 / model null / URL 空 → **空 Map**（宁可不注入也不注入错的会话） |
+| 时间口径 | `ScheduleTime` 改为固定北京时间 +08:00，与引擎 `formatTimeBeijing` 逐字一致 |
+
+**新增契约原则**（§8.3）：**解析失败也必须收敛 UI 状态** —— 不得沿用上一次成功解析的结果。
+
+### Lead 的表述错误（被 android-dev 顶回）
+
+我在验收标准里写「`openAtInput` 自动变成 **2026-09-23 09:33**（tfGAWU4 = **1790040856347**）」—— android-dev 独立核算后指出两个值对不上：`1790040856347` = 北京 **2026-09-22 09:34**（**BeginDate = 创建时间**，正是 v1.0.6 刻意不再使用的值）。
+**结论**：验收值 2026-09-23 09:33 是对的（来自页面未开放文案与 `left`+`nowTime`），但**我把两个不同来源的值并列写**，是我的表述错误。验收口径已改为「**输入框的值 == 平台提示的北京时间**」，不硬编码具体时刻。
+
+### 测试侧亮点
+
+- `SurveyStatusTest`（12 用例）把本轮 bug **断言化**：`fromModel(null, null, Long.MAX_VALUE)` 仍必须是 UNKNOWN
+- `SurveySessionTest`（7 用例）覆盖串号回归
+- **静态回归防线**：用 awk 截取 `submitAll()` 函数体后 grep，机械审计「提交路径不依赖 `state.survey`」；以后若被塞回，报告直接 FAIL
+- 真实 fixture 用例带**时间守卫**（走过开放时刻就跳过并打印原因），避免测试将来过期变红
 
 ---
 
