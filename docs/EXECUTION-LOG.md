@@ -13,8 +13,9 @@
 | 应用名 / 包名 | 问卷自动填表 / `com.wjx.autofill` |
 | 团队 | Lead + 5 个 Agent：architect（方案设计）、api-debug（接口调试）、android-dev（安卓开发）、qa-build（测试打包）、delivery（交付上传） |
 | 仓库 | https://github.com/zimu5683/wjx-auto-filler （public） |
-| Release | v1.0.0 / v1.0.1 / v1.0.2（最终交付） |
-| 最终 APK | `dist/wjx-autofill-1.0.2-universal.apk`（6138246 B，sha256 `8c0c4758e73b8d0c…`） |
+| Release | v1.0.0 / v1.0.1 / v1.0.2 / v1.0.3 / **v1.0.4（最终交付）** |
+| 最终 APK | `dist/wjx-autofill-1.0.4-universal.apk`（6182574 B，sha256 `b522ae12395d3d8c…`） |
+| 功能范围 | 二维码识别 → 问卷星纯接口自动填表 → 自定义字段映射 → 应用内更新 → **定时自动提交（前台常驻）** → **人机验证检测提醒** |
 | 签名密钥 | `~/wjx-release/wjx-release.keystore`（**不入库**），证书 SHA-256 `ED:CC:E5:6E:F5:D1:50:CC:75:97:22:3D:DB:43:80:BB:CE:32:87:56:AB:B4:A8:BD:13:FF:BD:A8:7C:70:83:72` |
 
 ### 模型一致性（用户硬性要求）
@@ -142,6 +143,49 @@ teammate 继承 Lead 的 root model（`dsh-experimental-agent-team` 的 `root.op
 | `dist/wjx-autofill-1.0.0-universal.apk` | 6138222 B | `fd1370a7040e805e2e70b438f52d4cb36b26077bf79b54ca29de39b3a433a9ab` |
 | `dist/wjx-autofill-1.0.1-universal.apk` | 6138222 B | `0db09f8d1444fb182fb6fceb5c2042c8890ed0b44ad29edcd69cf969d71b3dfb` |
 | **`dist/wjx-autofill-1.0.2-universal.apk`** | **6138246 B** | **`8c0c4758e73b8d0c22f51abf416017a0daa81feaf7f5acd92673a022f274d997`** |
+
+---
+
+## 4.5 第二轮：新功能（定时自动提交 + 人机验证提醒）
+
+用户确认 **v1.0.2 真机验证通过**后，提出两项新功能。**用户已确认的四项决策**：仍只做问卷星（时间解析做成可插拔适配器）／只做**前台常驻服务**（不做闹钟/WorkManager）／到点遇验证**只推送通知**／提前提醒**可配置、默认 10 分钟**。后续又两次变更：**响铃/震动做成可选项**、**检测到验证直接进验证页**（不再先弹「人工验证后重试」按钮），并明确**不做自主人机验证**。
+
+| 任务 | 负责人 | 结果 |
+|---|---|---|
+| T16 时间适配器 + `E_NOT_OPEN` + 人机验证检测 | api-debug | ✅ `WjxTimeAdapter`（`BeginDate` 优先/文案兜底/Unknown 不拦截）、`needsCaptchaHint`（只读 `useAliVerify` **值**） |
+| T17 前台服务 + 定时提交 + 通知 + UI | android-dev | ✅ `specialUse` 前台常驻 + `START_STICKY`、`ScheduledTaskStore`、`Notifier` 三渠道 + 验证双渠道、`PendingCaptchaStore`、直接进验证页 |
+| T18 契约与设计文档 | architect | ✅ 契约 §2.3/§5.2/§8.x + DESIGN §13（含 `java.time` 禁用坑） |
+| T19 测试 + 构建 | qa-build | ✅ 410 用例 0 失败（新增 48）、v1.0.3/v1.0.4 |
+| T20 发布 | delivery | ✅ v1.0.3 / v1.0.4 |
+| T21 总验收 + 本日志 | Lead | ✅ |
+
+### 本轮关键事实（实测）
+
+| 事实 | 证据 |
+|---|---|
+| `BeginDate="<epoch ms>"` **所有问卷页都有** | 未开放 `tfGAWU4`=`1790040856347`（2026-09-23 09:33）；已开放 `P2M09FG`/`Q0DQewW` 为过去时间 → 用时间戳比较判定，不猜文案 |
+| 未开放页仍带 `jqnonce`/`starttime`，只是题目不下发 | `fieldset`/`topic=` 计数 0 → 原 `E_PARSE`「可能已关闭或页面改版」是误报，新增 `E_NOT_OPEN` |
+| ⚠️ **人机验证标记是模板常量** | `useAliVerify`/`captchaWrap`/`wjx_captch` **所有问卷都有**（含从未被拦的 P2M09FG）→ **只能读值**，看标记存在会 100% 误报 |
+| 用户选择**不做预检提交** | 我提出「故意缺答探安全门」方案，用户选零风险路线 → 契约写入禁止性声明：不做任何额外探测请求 |
+
+### 本轮事故：三个 Agent 同时掉线（Lead 接管）
+
+`android-dev` / `api-debug` / `qa-build` **在同一时间段失败退出，均无收尾消息**（环境层面问题）。android-dev 停在半成品，源码**编译不过**。Lead 接管并修复：
+
+1. `MainActivity:1142` 把 `CharSequence` 传给 `toast(String)` → `toString()`
+2. `MainActivity:330/334` 调用不存在的 `renderScheduleStatus()` → `renderSchedule()`
+3. **补完 android-dev 未完成的响铃/震动开关**：新增 `schedule/SchedulePrefs.kt`（SharedPreferences，默认都开）+ MainActivity 接线两个 Switch + `ScheduledRunner` 改从偏好读取（替代其引用的不存在的 `task.alertSound` 字段，避免动冻结签名）
+
+### 本轮发现的真缺陷
+
+| # | 缺陷 | 后果 | 发现者 |
+|---|---|---|---|
+| 11 | `Notifier.kt` 缺同方法内权限检查（lint `MissingPermission`） | lintRelease 1 Error，CI 红 | qa-build |
+| 12 | **`Notifier.kt` 在 11:48:16 被改，而 dist 的 APK 是 11:48:25 从 11:38 构建输出复制的** | **仓库 HEAD 与已发布 v1.0.3 的 APK 不一致**（比 lint 本身严重） | Lead |
+| 13 | `normalizeLeadMinutes` 负值返回 10 ≠ 冻结口径 0 | 边界行为不符契约 | qa-build |
+| 14 | 报告里 lint 的 PASS 来自 08:41 的旧 XML | 旧证据冒充本次结果 | qa-build |
+
+**处置**：v1.0.3 的 tag 与资产**不动**（已发布的 tag 不应移动），**新发 v1.0.4** 由修复后源码构建（`./gradlew test lintRelease assembleRelease` 同一轮），lint Error 归零、源码与 APK 对齐。`dist/LINT-WAIVER-v1.0.3-historical.md` 保留为 v1.0.3 豁免决策的归档。
 
 ---
 
