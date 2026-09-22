@@ -209,3 +209,21 @@ Lead 2026-09-22 裁定**取消 useAliVerify 本地门控**。现行口径：
 
 - **152 用例全部通过（OK (152 tests)）**，覆盖上述全部文件（QrDecodeTest 因需 android.jar 单独跑，见前面 5/5 通过记录）。
 - Gradle 侧最终构建由 Lead 直接执行；本 agent 不再启动 Gradle，避免构建互等锁。
+## 2026-09-22 09:00–09:05 v1.0.2 产物与证据新鲜度
+
+### 产物（Lead 直接执行最终构建；我已独立复核）
+
+- `dist/wjx-autofill-1.0.2-universal.apk`（6138246 B，09:02:43），sha256 `8c0c4758e73b8d0c22f51abf416017a0daa81feaf7f5acd92673a022f274d997`（sha256sum -c OK）。
+- apksigner：CN=WJX AutoFill，SHA-256 `edcce56ef5d150cc7597223ddb4380bbce328756abb4a8bd13ffbda87c708372`（与 1.0.0/1.0.1 同一把密钥）。
+- badging：com.wjx.autofill 1.0.2 (10002)、minSdkVersion 24、targetSdkVersion 35、native-code 四 ABI。
+- VERIFY-REPORT.md：ALL PASS（PASS 20 / FAIL 0 / WARN 0），构建任务 assembleRelease。
+
+### 发现：报告的「单元测试 282」来自 08:36 的旧一轮
+
+- 证据：test-results/testDebugUnitTest/ 下 14 个 XML 全部 mtime=08:36，且**没有 CookieHeaderTest**；
+  各文件用例数也是旧的（ResponseClassifier=14/现 18、SubmitRequest=12/现 15、SubmitCoordinator=10/现 11）。
+- 原因：最终构建走的是 `build-apk.sh --quick`（日志只有 assembleRelease），test 任务未执行，报告沿用了旧 XML。
+- 我的兜底验证：最新测试源码用独立 kotlinc + JUnit 跑 **152 用例全过**（QrDecodeTest 需 android.jar，单独 5/5 过）。
+- 风险点：`WjxUrlsTest` 访问 `internal object WjxUrls`；AGP 单测有 friend-path 应可访问，但**未在 Gradle 实跑验证**。
+- 已向 Lead 提议：补跑一次 `./gradlew test`（不跑 assembleRelease → APK 字节不变）+ `build-apk.sh --skip-build` 刷新报告；等裁决。
+- APK 本身不受影响，已把核验数据同步给 delivery。
